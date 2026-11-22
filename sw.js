@@ -1,6 +1,6 @@
-const CACHE = 'piano-v1';
+const CACHE = 'piano-v2';
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', 'index.html', 'manifest.json', 'icon.svg'])));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', 'index.html', 'style.css', 'js/app.js', 'js/songs.js', 'manifest.json', 'icon.svg'])));
   self.skipWaiting();
 });
 self.addEventListener('activate', e => {
