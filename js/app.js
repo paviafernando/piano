@@ -157,6 +157,7 @@
     if (el) { el.style.setProperty('--hit', noteColor(midi)); el.classList.add('down'); }
     drawMini();
     if (game.active) gamePress(midi);
+    else if (ctrl.active) padSend({ t: 'on', midi, at: now() + tv.offset });
     else if (state.theme === 'princess') { const k = keyScreen(midi); sparkle(k.x, k.top + 14, noteColor(midi), 5, 0.6); }
   }
   function noteOff(midi) {
@@ -166,6 +167,7 @@
     if (state.sustain && !game.active) sustained.add(midi); else stopVoice(midi);
     drawMini();
     if (game.active) gameRelease(midi);
+    else if (ctrl.active) padSend({ t: 'off', midi, at: now() + tv.offset });
   }
   function releaseSustain() {
     for (const m of sustained) if (!held.has(m)) stopVoice(m, 0.6);
@@ -194,13 +196,14 @@
     return Math.max(28, Math.min(110, w / target));
   }
 
-  function labelsMode() { return game.active ? 2 : state.labels; }
+  function fitRange() { return game.active ? game : ctrl.active ? ctrl : null; }
+  function labelsMode() { return fitRange() ? 2 : state.labels; }
   function noteLabel(m) {
     const lm = labelsMode();
     if (lm === 0) return '';
     const pc = m % 12;
     if (lm === 1) return pc === 0 ? 'Do' + octaveOf(m) : '';
-    if (game.active) return NAMES_ES[pc];
+    if (fitRange()) return NAMES_ES[pc];
     return NAMES_ES[pc] + (pc === 0 ? octaveOf(m) : '');
   }
 
@@ -239,8 +242,8 @@
     geom.kbTop = game.active ? Math.round(Math.min(geom.viewH * 0.58, geom.viewH - 120)) : 0;
     kb.style.top = geom.kbTop + 'px';
 
-    if (game.active) {
-      geom.whiteW = game.fitWhiteW();
+    if (fitRange()) {
+      geom.whiteW = fitWhiteW(fitRange());
     } else {
       if (!state.whiteW) state.whiteW = defaultWhiteW();
       geom.whiteW = state.whiteW;
@@ -256,8 +259,8 @@
       el.firstChild.textContent = noteLabel(m);
       el.style.fontSize = isBlack(m) ? (small ? '8px' : '10px') : (small ? '10px' : '12px');
     }
-    if (game.active) {
-      setScroll(game.fitScroll());
+    if (fitRange()) {
+      setScroll(fitScroll(fitRange()));
     } else if (keepCenter && oldCenterRatio !== null) {
       setScroll(oldCenterRatio * geom.totalW - geom.viewW / 2);
     } else if (!keepCenter) {
@@ -323,7 +326,7 @@
 
   stage.addEventListener('wheel', e => {
     e.preventDefault();
-    if (game.active) return;
+    if (fitRange()) return;
     setScroll(state.scroll + (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY));
     saveScroll();
   }, { passive: false });
@@ -463,6 +466,7 @@
   function loop() {
     fctx.clearRect(0, 0, fxW, fxH);
     if (game.active && !game.ended) { gameTick(); drawLane(); }
+    if (ctrl.active && ctrl.holds.size) drawPadHolds();
 
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
@@ -493,7 +497,7 @@
     }
     fctx.globalAlpha = 1;
 
-    if ((game.active && !game.ended) || particles.length || texts.length) requestAnimationFrame(loop);
+    if ((game.active && !game.ended) || (ctrl.active && ctrl.holds.size) || particles.length || texts.length) requestAnimationFrame(loop);
     else { rafOn = false; fctx.clearRect(0, 0, fxW, fxH); }
   }
 
@@ -551,18 +555,17 @@
     start: 0, hold: null, paused: false, waiting: false, idx: 0, ended: false, holding: new Set(),
     score: 0, combo: 0, maxCombo: 0, counts: null, mistakes: 0, look: 2400, duo: false, grand: false,
     lo: 60, hi: 72, targetKey: '', targets: [], endAt: 0, figI: -1, rests: [],
-    fitWhiteW() {
-      const wl = whiteIndex[this.lo - (isBlack(this.lo) ? 1 : 0)];
-      const wh = whiteIndex[this.hi + (isBlack(this.hi) ? 1 : 0)];
-      const n = wh - wl + 1 + 2;
-      return Math.max(28, Math.min(120, geom.viewW / n));
-    },
-    fitScroll() {
-      const wl = whiteIndex[this.lo - (isBlack(this.lo) ? 1 : 0)];
-      const wh = whiteIndex[this.hi + (isBlack(this.hi) ? 1 : 0)];
-      return (wl + wh + 1) / 2 * geom.whiteW - geom.viewW / 2;
-    },
   };
+  function fitWhiteW(r) {
+    const wl = whiteIndex[r.lo - (isBlack(r.lo) ? 1 : 0)];
+    const wh = whiteIndex[r.hi + (isBlack(r.hi) ? 1 : 0)];
+    return Math.max(28, Math.min(ctrl.active ? 160 : 120, geom.viewW / (wh - wl + 1 + (ctrl.active ? 1 : 2))));
+  }
+  function fitScroll(r) {
+    const wl = whiteIndex[r.lo - (isBlack(r.lo) ? 1 : 0)];
+    const wh = whiteIndex[r.hi + (isBlack(r.hi) ? 1 : 0)];
+    return (wl + wh + 1) / 2 * geom.whiteW - geom.viewW / 2;
+  }
   const now = () => performance.now();
   function gameTime() { return game.hold !== null ? game.hold : now() - game.start; }
 
@@ -589,6 +592,13 @@
   function startGame(song, mode, opts = {}) {
     stopPreview();
     initAudio();
+    if (tv.role === 'pad' && tv.connected) {
+      padSend({ t: 'start', song: song.id, mode, tempo: tempoVal(), view: store.get('view', 'blocks') });
+      hideAll();
+      toast('📺 ¡A jugar en la tele!', 1500);
+      return;
+    }
+    if (tv.role === 'tv') { tvBegin(song, mode, tempoVal(), store.get('view', 'blocks')); return; }
     const duoOn = mode !== 'guess' && duo.connected;
     if (duoOn && !opts.remote) {
       duoSend({ t: 'start', song: song.id, mode, tempo: tempoVal() });
@@ -608,11 +618,12 @@
     game.active = true; game.ended = false; game.paused = false; game.waiting = false;
     game.song = song; game.mode = mode; game.duo = !!o.duo;
     game.tempo = o.tempo ?? tempoVal();
-    game.view = mode === 'guess' ? 'staff' : mode === 'learn' ? store.get('view', 'blocks') : 'blocks';
+    game.view = mode === 'guess' ? 'staff' : mode === 'learn' ? (o.view || store.get('view', 'blocks')) : 'blocks';
     game.holding = new Set(); game.endAt = 0; game.figI = -1; game.rests = []; game.clusters = [];
     game.score = 0; game.combo = 0; game.maxCombo = 0; game.mistakes = 0; game.idx = 0; game.gidx = 0;
     game.counts = { perfect: 0, great: 0, good: 0, miss: 0, short: 0, long: 0 };
     game.partnerResult = null; game.myResult = null;
+    game.tv = !!o.tv; game.padScore = {}; game.padTgt = {};
     if (mode === 'guess') {
       game.tempo = 1; game.grand = false;
       const pool = GUESS_POOLS[song.level];
@@ -625,15 +636,20 @@
       game.mine = game.notes; game.groups = [];
       game.qStart = 0; game.lockUntil = 0; game.answerTimes = [];
     } else {
-      const useBass = game.duo || song.level === 3;
-      const myVoices = game.duo ? [duo.hand === 'right' ? 0 : 1] : useBass ? [0, 1] : [0];
+      const useBass = game.tv ? (tv.pads.length >= 2 || song.level === 3) : (game.duo || song.level === 3);
+      const myVoices = game.tv ? (useBass ? [0, 1] : [0]) : game.duo ? [duo.hand === 'right' ? 0 : 1] : useBass ? [0, 1] : [0];
+      const ownerOf = v => {
+        if (!game.tv) return undefined;
+        if (tv.pads.length >= 2) return (tv.pads.find(p => p.hand === (v === 0 ? 'right' : 'left')) || tv.pads[0]).id;
+        return tv.pads[0]?.id;
+      };
       game.grand = useBass;
       game.msBeat = 60000 / (song.bpm * game.tempo);
       const src = song.parsed.concat(useBass ? song.bassParsed : []).sort((a, b) => a.beat - b.beat || a.voice - b.voice);
       game.notes = src.map((n, i) => ({
         i, voice: n.voice, midi: n.midi, beat: n.beat, beats: n.beats,
         ms: LEAD + n.beat * game.msBeat, dur: n.beats * game.msBeat,
-        state: 'pending', mist: false, pressed: false, mine: myVoices.includes(n.voice),
+        state: 'pending', mist: false, pressed: false, mine: myVoices.includes(n.voice), owner: ownerOf(n.voice),
       }));
       game.mine = game.notes.filter(n => n.mine);
       game.rests = song.rests.map(r => ({ ...r, ms: LEAD + r.beat * game.msBeat }));
@@ -700,6 +716,7 @@
       : game.mine.filter(n => n.state !== 'pending').length;
     $('hudProg').style.width = (done / Math.max(1, game.mode === 'guess' ? game.notes.length : game.mine.length) * 100) + '%';
     if (bumpScore) { const s = $('hudScore'); s.classList.remove('bump'); void s.offsetWidth; s.classList.add('bump'); }
+    if (game.tv) tvBroadcast({ t: 'score', score: game.score, combo: game.combo, mult: mult(), prog: $('hudProg').style.width });
   }
 
   // Cartel con la figura de la nota que se está tocando
@@ -720,6 +737,7 @@
   };
 
   function onHit(n, kind, pts) {
+    if (game.tv) { game.padScore[n.owner] = (game.padScore[n.owner] || 0) + pts * mult(); tvFx(n.owner, { t: 'fx', k: kind, midi: n.midi }); }
     game.combo++;
     game.maxCombo = Math.max(game.maxCombo, game.combo);
     game.score += pts * mult();
@@ -736,6 +754,7 @@
     updateHud(true);
   }
   function onMiss(n, wrong) {
+    if (game.tv) tvFx(n.owner, { t: 'fx', k: wrong ? 'wrong' : 'miss', midi: n.midi });
     game.combo = 0;
     const k = keyScreen(n.midi);
     floatText(wrong ? '¡Ups! Probá otra 💫' : 'Ups', k.x, k.top - 30, '#ffb3c6', wrong ? 20 : 18);
@@ -747,6 +766,7 @@
 
   function judgeHold(n, heldMs) {
     game.holding.delete(n);
+    if (game.tv) tvFx(n.owner, { t: 'holdEnd', midi: n.midi });
     const tol = holdTol(n.dur);
     const err = heldMs - n.dur;
     const k = keyScreen(n.midi);
@@ -758,6 +778,7 @@
     } else {
       n.durBad = true;
       const short = err < 0;
+      if (game.tv) tvFx(n.owner, { t: 'fx', k: short ? 'short' : 'long', midi: n.midi });
       game.counts[short ? 'short' : 'long']++;
       game.combo = 0;
       floatText(short ? '⚡ ¡Más largo!' : '⏳ ¡Más corto!', k.x, k.top - 40, '#ffd6a5', 22);
@@ -765,9 +786,9 @@
     }
   }
 
-  function gameRelease(m) {
+  function gameRelease(m, who, at) {
     if (game.mode !== 'learn') return;
-    for (const n of game.holding) if (n.midi === m) { judgeHold(n, now() - n.pressReal); break; }
+    for (const n of game.holding) if (n.midi === m && (who === undefined || n.owner === who)) { judgeHold(n, (at ?? now()) - n.pressReal); break; }
   }
 
   // Avanza cuando todas las notas del grupo (acorde) están tocadas, propias o del compañero
@@ -782,28 +803,31 @@
     if (advanced) setTargets([]);
   }
 
-  function gamePress(m) {
+  function gamePress(m, who, at) {
     if (!game.active || game.paused || game.ended) return;
-    if (game.mode === 'guess') return guessPress(m);
-    const t = gameTime();
+    if (game.mode === 'guess') return guessPress(m, who);
+    const own = x => who === undefined || x.owner === who;
+    const t = (at !== undefined && game.hold === null) ? at - game.start : gameTime();
     if (game.mode === 'learn') {
       const g = game.groups[game.gidx];
       if (!g) return;
       const early = g.ms - t;
       if (!(game.waiting || early < 700)) return;
-      const n = g.notes.find(x => x.mine && !x.pressed && x.midi === m);
+      const n = g.notes.find(x => x.mine && own(x) && !x.pressed && x.midi === m);
       if (n) {
         n.pressed = true;
-        n.pressReal = now();
+        n.pressReal = at ?? now();
+        if (game.tv) tvFx(n.owner, { t: 'hold', midi: n.midi, dur: n.dur, beats: n.beats });
         game.holding.add(n);
         game.score += n.mist ? 20 : 50;
+        if (game.tv) game.padScore[n.owner] = (game.padScore[n.owner] || 0) + (n.mist ? 20 : 50);
         const k = keyScreen(n.midi);
         sparkle(k.x, k.top, noteColor(n.midi), 8, 0.8);
         if (game.duo) duoSend({ t: 'press', i: n.i });
         checkGroup();
         updateHud(true);
-      } else if (!g.notes.some(x => x.mine && x.midi === m)) {
-        const pend = g.notes.filter(x => x.mine && !x.pressed);
+      } else if (!g.notes.some(x => x.mine && own(x) && x.midi === m)) {
+        const pend = g.notes.filter(x => x.mine && own(x) && !x.pressed);
         if (!pend.length) return;
         if (!g.mistCounted) { g.mistCounted = true; game.mistakes++; }
         pend.forEach(x => x.mist = true);
@@ -815,7 +839,7 @@
     // Desafío: la nota propia pendiente más cercana de esa tecla
     let best = null, bd = 1e9;
     for (const n of game.mine) {
-      if (n.state !== 'pending' || n.midi !== m) continue;
+      if (n.state !== 'pending' || n.midi !== m || !own(n)) continue;
       const d = Math.abs(t - n.ms);
       if (d < bd) { bd = d; best = n; }
       if (n.ms - t > WIN.good) break;
@@ -837,9 +861,10 @@
     { id: 'guess3', name: 'Adivinar: con sostenidos', emoji: '🔮', level: 3, desc: 'De Sol3 a Do6, también teclas negras (♯)' },
   ];
 
-  function guessPress(m) {
+  function guessPress(m, who) {
     const n = game.notes[game.idx];
     if (!n || now() < game.lockUntil || !game.qStart) return;
+    n.owner = who;
     const k = keyScreen(n.midi);
     if (m === n.midi) {
       const el = now() - game.qStart;
@@ -854,6 +879,7 @@
       game.lockUntil = now() + 450;
       game.qStart = 0;
       setTargets([]);
+      if (game.tv) tvBroadcast({ t: 'tgt', list: [] });
       if (game.idx >= game.notes.length) game.endAt = now() + 700;
     } else {
       n.mist++;
@@ -862,7 +888,8 @@
       const wk = keyScreen(m);
       const sameName = m % 12 === n.midi % 12;
       floatText(sameName ? `¡Es ${noteName(m)}! Pero ${m < n.midi ? 'más aguda ⬆' : 'más grave ⬇'}` : '¡Ups! Probá otra 💫', wk.x, wk.top - 30, '#ffb3c6', 19);
-      if (n.mist >= 2) setTargets([n.midi], true);
+      if (game.tv) tvFx(who, { t: 'fx', k: 'wrong', midi: m, txt: sameName ? `¡Es ${noteName(m)}! Pero ${m < n.midi ? 'más aguda ⬆' : 'más grave ⬇'}` : null });
+      if (n.mist >= 2) { setTargets([n.midi], true); if (game.tv) tvFx(who, { t: 'tgt', list: [n.midi], wrong: true }); }
       updateHud();
     }
   }
@@ -881,6 +908,7 @@
         if (!game.waiting && t >= g.ms) { game.waiting = true; game.hold = g.ms; }
         const pend = g.notes.filter(n => n.mine && !n.pressed);
         setTargets(g.ms - t < 1500 ? pend.map(n => n.midi) : []);
+        if (game.tv) tvTargets(g.ms - t < 1500 ? pend : []);
         if (!figNote) figNote = pend[0] || null;
       } else if (!game.endAt && !game.holding.size) game.endAt = now() + 700;
       updateFig(figNote);
@@ -896,6 +924,7 @@
         if (d > 400) break;
       }
       setTargets(targets.map(i => game.mine[i].midi));
+      if (game.tv) tvTargets(targets.map(i => game.mine[i]));
       updateFig(figNote);
       const last = game.mine[game.mine.length - 1];
       if (!game.endAt && game.mine.every(n => n.state !== 'pending')) game.endAt = now() + Math.max(600, last.dur);
@@ -1063,11 +1092,11 @@
     const grand = game.grand && game.mode !== 'guess';
     let g, staves;
     if (grand) {
-      g = Math.max(5.5, Math.min(13, (h - 18) / 17.5));
+      g = Math.max(5.5, Math.min(tv.role === 'tv' ? 22 : 13, (h - 18) / 17.5));
       const midT = top + 8 + g * 4.2;
       staves = [{ ...TREBLE, midY: midT }, { ...BASS, midY: midT + g * 8.4 }];
     } else {
-      g = Math.max(7, Math.min(16, (h - 26) / 12));
+      g = Math.max(7, Math.min(tv.role === 'tv' ? 24 : 16, (h - 26) / 12));
       staves = [{ ...TREBLE, midY: top + h * 0.46 }];
     }
     for (const st of staves) { st.y = s => st.midY - (s - st.mid) * g / 2; st.paper = paper; }
@@ -1298,6 +1327,7 @@
     for (const m of [...held]) noteOff(m);
     show('pauseOverlay');
     if (game.duo && fromRemote !== true) duoSend({ t: 'pause' });
+    if (game.tv) tvBroadcast({ t: 'paused' });
   }
   function resume(fromRemote) {
     if (!game.paused) return;
@@ -1307,6 +1337,7 @@
     if (game.waiting) game.hold = game.pausedHold ?? t;
     else { game.hold = null; game.start = now() - t; }
     if (game.duo && fromRemote !== true) duoSend({ t: 'resume' });
+    if (game.tv) tvBroadcast({ t: 'resumed' });
   }
   function quitGame() {
     if (game.duo && game.active) duoSend({ t: 'quit' });
@@ -1364,11 +1395,17 @@
     });
     game.myResult = { score: game.score, stars };
     if (game.duo) duoSend({ t: 'result', score: game.score, stars });
+    if (game.tv) for (const pad of tv.pads) tvSend(pad, { t: 'end', stars, team: game.score, mine: game.padScore[pad.id] || 0, title: game.song.emoji + ' ' + game.song.name, stats });
     showResults(stars, stats, record && game.score > 0);
   }
 
   function renderDuoResult() {
     const el = $('resDuo');
+    if (game.tv) {
+      el.hidden = false;
+      el.innerHTML = tv.pads.map(p => `${p.hand === 'right' ? '👉 Mano derecha' : '👈 Mano izquierda'}: <b>${(game.padScore[p.id] || 0).toLocaleString('es-AR')}</b>`).join(' · ');
+      return;
+    }
     if (!game.duo) { el.hidden = true; return; }
     el.hidden = false;
     const other = duo.hand === 'right' ? '👈 Mano izquierda' : '👉 Mano derecha';
@@ -1378,20 +1415,20 @@
     el.innerHTML = `${other}: <b>${p.score.toLocaleString('es-AR')}</b> ${'⭐'.repeat(p.stars)} · 🤝 Equipo: <b>${team.toLocaleString('es-AR')}</b>`;
   }
 
-  function showResults(stars, stats, record) {
+  function showResults(stars, stats, record, score = game.score, songLine = null) {
     const titles = state.theme === 'princess'
       ? ['¡Seguí practicando! 🌷', '¡Bien hecho! 🌸', '¡Muy bien! 💖', '¡Increíble! 👑']
       : ['¡Seguí practicando!', '¡Bien hecho!', '¡Muy bien!', '¡Increíble!'];
     $('resTitle').textContent = titles[stars];
-    $('resSong').textContent = game.mode === 'guess' ? `${game.song.emoji} ${game.song.name}` : `${game.song.emoji} ${game.song.name} · ${game.mode === 'learn' ? 'Aprender' : 'Desafío'} · ${Math.round(game.tempo * 100)}%`;
+    $('resSong').textContent = songLine ? songLine : game.mode === 'guess' ? `${game.song.emoji} ${game.song.name}` : `${game.song.emoji} ${game.song.name} · ${game.mode === 'learn' ? 'Aprender' : 'Desafío'} · ${Math.round(game.tempo * 100)}%`;
     $('resStats').innerHTML = stats.map(([e, l, v]) => `<div>${e} ${l}<b>${v}</b></div>`).join('');
     $('resRecord').hidden = !record;
-    renderDuoResult();
+    if (songLine === null) renderDuoResult();
     const starEls = [...$('resStars').children];
     starEls.forEach(s => s.classList.remove('lit'));
     show('resultOverlay');
     fx.style.zIndex = 60;
-    const target = game.score, t0 = now();
+    const target = score, t0 = now();
     const step = () => {
       const k = Math.min(1, (now() - t0) / 900);
       $('resScore').textContent = Math.round(target * (1 - Math.pow(1 - k, 3))).toLocaleString('es-AR');
@@ -1517,14 +1554,15 @@
   }
 
   // ---- Botones de pausa y resultados ----
-  $('hudPause').onclick = () => pause();
-  $('btnResume').onclick = () => resume();
-  $('btnRestart').onclick = () => { const s = game.song, m = game.mode; hide('pauseOverlay'); startGame(s, m); };
-  $('btnPauseSongs').onclick = () => { if (game.duo) duoSend({ t: 'quit' }); hide('pauseOverlay'); openPicker(); };
-  $('btnQuit').onclick = () => quitGame();
-  $('btnAgain').onclick = () => { fx.style.zIndex = 30; startGame(game.song, game.mode); };
-  $('btnResSongs').onclick = () => { fx.style.zIndex = 30; openPicker(); };
-  $('btnResQuit').onclick = () => { fx.style.zIndex = 30; hideAll(); endGameUI(); };
+  const isPad = () => tv.role === 'pad' && tv.connected;
+  $('hudPause').onclick = () => isPad() ? padSend({ t: 'pause' }) : pause();
+  $('btnResume').onclick = () => isPad() ? padSend({ t: 'resume' }) : resume();
+  $('btnRestart').onclick = () => { hide('pauseOverlay'); if (isPad()) return padSend({ t: 'restart' }); const s = game.song, m = game.mode; startGame(s, m); };
+  $('btnPauseSongs').onclick = () => { hide('pauseOverlay'); if (isPad()) { padSend({ t: 'lobby' }); padExitGame(); return openPicker(); } if (game.duo) duoSend({ t: 'quit' }); openPicker(); };
+  $('btnQuit').onclick = () => { if (isPad()) { hideAll(); padSend({ t: 'lobby' }); return padExitGame(); } if (tv.role === 'tv') return tvLobby(); quitGame(); };
+  $('btnAgain').onclick = () => { fx.style.zIndex = 30; if (isPad()) { hideAll(); return padSend({ t: 'restart' }); } if (tv.role === 'tv') return tvBegin(game.song, game.mode, game.tempo, game.view); startGame(game.song, game.mode); };
+  $('btnResSongs').onclick = () => { fx.style.zIndex = 30; if (isPad()) { padSend({ t: 'lobby' }); padExitGame(); } if (tv.role === 'tv') return tvLobby(); openPicker(); };
+  $('btnResQuit').onclick = () => { fx.style.zIndex = 30; hideAll(); if (isPad()) { padSend({ t: 'lobby' }); return padExitGame(); } if (tv.role === 'tv') return tvLobby(); endGameUI(); };
 
   // ================== Dos dispositivos (una mano cada uno) ==================
   const PEER_PREFIX = 'pianomagico-fp-';
@@ -1654,7 +1692,8 @@
     $('duoOn').hidden = s !== 'on';
     $('duoIntro').hidden = s !== 'idle';
     $('duoCodeShow').textContent = s === 'wait' ? duo.code : '…';
-    $('duoWaitTxt').textContent = s === 'wait' ? 'Escribí este código en el otro dispositivo' : 'Conectando…';
+    if (s === 'wait') qrInto($('duoQr'), joinUrl('sala', duo.code)); else $('duoQr').innerHTML = '';
+    $('duoWaitTxt').textContent = s === 'wait' ? 'Escaneá el QR con la cámara del otro celular (o escribí el código)' : 'Conectando…';
     $('duoHandTxt').innerHTML = duo.hand === 'right'
       ? 'Este dispositivo toca la <b>👉 mano derecha</b> (melodía).<br>El otro, la mano izquierda.'
       : 'Este dispositivo toca la <b>👈 mano izquierda</b> (acompañamiento).<br>El otro, la mano derecha.';
@@ -1675,10 +1714,332 @@
   $('duoPick').onclick = () => { hide('duoOverlay'); openPicker(); };
   $('duoLeave').onclick = () => { duoSend({ t: 'bye' }); duoReset(); duo.status = 'idle'; renderDuo(); };
 
+  // ================== QR para unirse ==================
+  function loadScript(src) {
+    return new Promise((ok, ko) => {
+      if (document.querySelector(`script[src="${src}"]`)) return ok();
+      const s = document.createElement('script');
+      s.src = src; s.onload = ok; s.onerror = () => ko(new Error('No se pudo cargar ' + src));
+      document.head.appendChild(s);
+    });
+  }
+  function joinUrl(param, code) {
+    return location.origin + location.pathname + '?' + param + '=' + code + (duo.local ? '&duotest' : '');
+  }
+  async function qrInto(el, text) {
+    try {
+      await loadScript('js/vendor/qrcode.js');
+      const qr = window.qrcode(0, 'M');
+      qr.addData(text); qr.make();
+      el.innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+    } catch { el.textContent = ''; }
+  }
+
+  // ================== Modo tele ==================
+  // La tele muestra el juego y decide aciertos; cada celular es un teclado que suena por su cuenta.
+  const tv = { role: null, peer: null, pads: [], code: null, conn: null, connected: false, offset: 0, bestRtt: 1e9, hand: 'right', pingT: null };
+  const ctrl = { active: false, lo: 60, hi: 72, holds: new Map(), mode: 'learn' };
+
+  // ---- Lado tele ----
+  async function tvStart() {
+    duoReset(); duo.status = 'idle';
+    tv.role = 'tv'; tv.pads = [];
+    tv.code = String(Math.floor(1000 + Math.random() * 9000));
+    document.body.classList.add('tvmode');
+    hide('startOverlay'); hide('rotateOverlay');
+    $('tvErr').textContent = '';
+    show('tvOverlay'); renderTv();
+    if (duo.local) return localHub(tv.code);
+    try { await loadPeer(); } catch { $('tvErr').textContent = 'No se pudo cargar la conexión. ¿Hay internet?'; return; }
+    try { tv.peer?.destroy(); } catch {}
+    const peer = new window.Peer(PEER_PREFIX + 'tv-' + tv.code);
+    tv.peer = peer;
+    peer.on('connection', c => tvAddConn(c));
+    peer.on('error', e => { if (e.type === 'unavailable-id') tvStart(); else $('tvErr').textContent = 'Error de conexión (' + e.type + ').'; });
+  }
+  function tvAddConn(c) {
+    const pad = { id: 'p' + Math.random().toString(36).slice(2, 8), conn: c, hand: null };
+    c.on('data', d => tvOnMessage(pad, d));
+    c.on('close', () => tvRemovePad(pad));
+    c.on('error', () => tvRemovePad(pad));
+  }
+  function tvRemovePad(pad) {
+    const i = tv.pads.indexOf(pad);
+    if (i < 0) return;
+    tv.pads.splice(i, 1);
+    toast((pad.hand === 'right' ? '👉 Mano derecha' : '👈 Mano izquierda') + ' se desconectó', 2500);
+    if (game.active && game.tv && !game.ended) {
+      // Las notas de ese teclado se dan por tocadas para que el juego siga
+      for (const n of game.notes) if (n.owner === pad.id) { n.pressed = true; if (n.state === 'pending') n.state = 'hit'; }
+      if (game.mode === 'learn') checkGroup();
+    }
+    renderTv();
+  }
+  const tvSend = (pad, msg) => { try { pad.conn.send(msg); } catch (e) { console.warn(e); } };
+  const tvBroadcast = msg => tv.pads.forEach(p => tvSend(p, msg));
+  const tvFx = (id, msg) => { const p = tv.pads.find(p => p.id === id); if (p) tvSend(p, msg); };
+  function tvTargets(notes) {
+    const by = {};
+    for (const n of notes) (by[n.owner] ||= []).push(n.midi);
+    for (const pad of tv.pads) {
+      const list = by[pad.id] || [];
+      const key = list.join(',');
+      if (game.padTgt[pad.id] !== key) { game.padTgt[pad.id] = key; tvSend(pad, { t: 'tgt', list }); }
+    }
+  }
+  function tvKey(m, on, color) {
+    const el = keyEls[m]; if (!el) return;
+    if (on) { el.style.setProperty('--hit', color || noteColor(m)); el.classList.add('down'); }
+    else el.classList.remove('down');
+  }
+  function tvOnMessage(pad, d) {
+    if (!d || !d.t) return;
+    switch (d.t) {
+      case 'hello': {
+        if (tv.pads.includes(pad)) return;
+        if (tv.pads.length >= 2) { tvSend(pad, { t: 'full' }); return; }
+        pad.hand = tv.pads.some(p => p.hand === 'right') ? 'left' : 'right';
+        tv.pads.push(pad);
+        tvSend(pad, { t: 'welcome', hand: pad.hand });
+        chime([hz(72), hz(79), hz(84)], 0.08, 0.1);
+        renderTv();
+        break;
+      }
+      case 'ping': tvSend(pad, { t: 'pong', ts: d.ts, tv: now() }); break;
+      case 'swap':
+        if (tv.pads.length === 2) tv.pads.forEach(p => p.hand = p.hand === 'right' ? 'left' : 'right');
+        else pad.hand = pad.hand === 'right' ? 'left' : 'right';
+        tv.pads.forEach(p => tvSend(p, { t: 'welcome', hand: p.hand }));
+        renderTv();
+        break;
+      case 'start': {
+        const song = SONGS.find(s => s.id === d.song) || GUESS_LEVELS.find(g => g.id === d.song);
+        if (song) tvBegin(song, d.mode, d.tempo, d.view);
+        break;
+      }
+      case 'restart': if (game.song) tvBegin(game.song, game.mode, game.tempo, game.view); break;
+      case 'on':
+        tvKey(d.midi, true);
+        if (game.active && game.tv) gamePress(d.midi, pad.id, d.at);
+        break;
+      case 'off':
+        tvKey(d.midi, false);
+        if (game.active && game.tv) gameRelease(d.midi, pad.id, d.at);
+        break;
+      case 'pause': if (game.active && game.tv) pause(true); break;
+      case 'resume': if (game.active && game.tv) resume(true); break;
+      case 'lobby': tvLobby(); break;
+    }
+  }
+  function tvBegin(song, mode, tempo, view) {
+    if (!tv.pads.length) { toast('Conectá un celular escaneando el QR', 3000); return; }
+    hideAll();
+    $('tempo').value = tempo || 1;
+    beginGame(song, mode, { tv: true, tempo, view });
+    for (const pad of tv.pads) {
+      let lo, hi;
+      if (mode === 'guess') { lo = Math.min(...GUESS_POOLS[song.level]); hi = Math.max(...GUESS_POOLS[song.level]); }
+      else {
+        const mids = game.notes.filter(n => n.owner === pad.id).map(n => n.midi);
+        if (!mids.length) mids.push(60, 72);
+        lo = Math.min(...mids); hi = Math.max(...mids);
+      }
+      tvSend(pad, { t: 'setup', name: song.name, emoji: song.emoji, mode, lo, hi, hand: pad.hand });
+    }
+  }
+  function tvLobby() {
+    hideAll();
+    if (game.active) endGameUI();
+    for (const m of Object.keys(keyEls)) keyEls[m].classList.remove('down');
+    tvBroadcast({ t: 'lobby' });
+    show('tvOverlay'); renderTv();
+  }
+  function renderTv() {
+    if (tv.role !== 'tv') return;
+    $('tvCode').textContent = tv.code || '…';
+    qrInto($('tvQr'), joinUrl('tele', tv.code));
+    const r = tv.pads.find(p => p.hand === 'right'), l = tv.pads.find(p => p.hand === 'left');
+    $('tvPads').innerHTML =
+      `<div class="${r ? 'on' : ''}">👉 Mano derecha: ${r ? '✅ conectada' : 'esperando…'}</div>` +
+      `<div class="${l ? 'on' : ''}">👈 Mano izquierda: ${l ? '✅ conectada' : 'esperando… (opcional)'}</div>`;
+    $('tvHint').textContent = tv.pads.length ? '¡Listo! Elegí la canción desde el celular 🎵' : 'Escaneá el código con la cámara del celular o tablet';
+  }
+  // Transporte de prueba entre pestañas (?duotest): la tele hace de centro
+  function localHub(code) {
+    const ch = new BroadcastChannel('piano-tv-' + code);
+    const conns = {};
+    ch.onmessage = e => {
+      const { from, to, d } = e.data;
+      if (to !== 'tv') return;
+      if (!conns[from]) {
+        const c = { _h: {}, on(ev, f) { this._h[ev] = f; }, send(x) { ch.postMessage({ from: 'tv', to: from, d: x }); }, close() {} };
+        conns[from] = c;
+        tvAddConn(c);
+      }
+      if (d.t === 'bye') { conns[from]._h.close?.(); delete conns[from]; return; }
+      conns[from]._h.data?.(d);
+    };
+  }
+
+  // ---- Lado celular (teclado) ----
+  async function padJoin(code) {
+    code = (code || '').replace(/\D/g, '');
+    if (code.length !== 4) return;
+    duoReset(); duo.status = 'idle';
+    tv.role = 'pad'; tv.code = code; tv.connected = false; tv.bestRtt = 1e9;
+    toast('📺 Conectando con la tele…', 2500);
+    if (duo.local) return localPad(code);
+    try { await loadPeer(); } catch { toast('No se pudo cargar la conexión. ¿Hay internet?', 4000); return; }
+    const peer = new window.Peer();
+    tv.peer = peer;
+    peer.on('open', () => padSetupConn(peer.connect(PEER_PREFIX + 'tv-' + code, { reliable: true })));
+    peer.on('error', e => toast(e.type === 'peer-unavailable' ? 'No encontré esa tele. Revisá el código.' : 'Error de conexión (' + e.type + ')', 4000));
+  }
+  function localPad(code) {
+    const ch = new BroadcastChannel('piano-tv-' + code);
+    const me = 'pad' + Math.random().toString(36).slice(2, 8);
+    const c = { _h: {}, on(ev, f) { this._h[ev] = f; }, send(x) { ch.postMessage({ from: me, to: 'tv', d: x }); }, close() { this.send({ t: 'bye' }); ch.close(); } };
+    ch.onmessage = e => { if (e.data.to === me) c._h.data?.(e.data.d); };
+    padSetupConn(c);
+    c._h.open?.();
+  }
+  function padSetupConn(c) {
+    tv.conn = c;
+    c.on('open', () => padSend({ t: 'hello' }));
+    c.on('data', padOnMessage);
+    c.on('close', padOnClose);
+    c.on('error', padOnClose);
+  }
+  function padSend(msg) { try { if (tv.conn) tv.conn.send(msg); } catch (e) { console.warn(e); } }
+  function padOnClose() {
+    if (!tv.connected) return;
+    tv.connected = false; tv.conn = null;
+    clearInterval(tv.pingT);
+    toast('📺 Se desconectó la tele', 3000);
+    hideAll(); padExitGame();
+  }
+  function padOnMessage(d) {
+    if (!d || !d.t) return;
+    switch (d.t) {
+      case 'welcome': {
+        const first = !tv.connected;
+        tv.connected = true; tv.hand = d.hand;
+        toast(`📺 Conectado a la tele · ${d.hand === 'right' ? '👉 Mano derecha' : '👈 Mano izquierda'}`, 2500);
+        if (first) {
+          clearInterval(tv.pingT);
+          let n = 0;
+          const ping = () => padSend({ t: 'ping', ts: now() });
+          ping();
+          tv.pingT = setInterval(() => { if (++n < 6 || n % 4 === 0) ping(); }, 500);
+          if (!$('startOverlay').classList.contains('show') && !ctrl.active) openPicker();
+        } else if ($('pickerOverlay').classList.contains('show')) renderPicker();
+        break;
+      }
+      case 'full': toast('La tele ya tiene 2 teclados conectados', 3500); break;
+      case 'pong': {
+        const rtt = now() - d.ts;
+        if (rtt <= tv.bestRtt * 1.3) { tv.offset = d.tv + rtt / 2 - now(); tv.bestRtt = Math.min(tv.bestRtt, rtt); }
+        break;
+      }
+      case 'setup': padBegin(d); break;
+      case 'tgt': setTargets(d.list || [], !!d.wrong); break;
+      case 'fx': padFx(d); break;
+      case 'hold': ctrl.holds.set(d.midi, { midi: d.midi, pressReal: now(), dur: d.dur, beats: d.beats }); ensureLoop(); break;
+      case 'holdEnd': ctrl.holds.delete(d.midi); break;
+      case 'score':
+        $('hudScore').textContent = '⭐ ' + d.score.toLocaleString('es-AR');
+        $('hudCombo').textContent = d.combo >= 2 ? `🔥 ${d.combo}${d.mult > 1 ? ' ×' + d.mult : ''}` : '';
+        $('hudProg').style.width = d.prog || '0%';
+        break;
+      case 'paused': if (ctrl.active) { for (const m of [...held]) noteOff(m); show('pauseOverlay'); } break;
+      case 'resumed': hide('pauseOverlay'); break;
+      case 'end': padEnd(d); break;
+      case 'lobby': if (ctrl.active || $('resultOverlay').classList.contains('show')) { hideAll(); padExitGame(); openPicker(); } break;
+    }
+  }
+  function padBegin(d) {
+    stopPreview(); initAudio();
+    hideAll();
+    for (const m of [...held]) noteOff(m);
+    ctrl.active = true; ctrl.lo = d.lo; ctrl.hi = d.hi; ctrl.mode = d.mode; ctrl.holds.clear();
+    setTargets([]);
+    document.body.classList.add('ingame', 'padmode');
+    $('bar').hidden = true; $('mini').hidden = true; $('hud').hidden = false;
+    $('hudEmoji').textContent = d.emoji;
+    $('hudName').textContent = d.name + (d.hand === 'right' ? ' · 👉' : ' · 👈');
+    $('hudFig').innerHTML = ''; $('hudScore').textContent = '⭐ 0'; $('hudCombo').textContent = ''; $('hudProg').style.width = '0%';
+    requestAnimationFrame(() => layout(false));
+  }
+  function padExitGame() {
+    if (!ctrl.active) return;
+    ctrl.active = false; ctrl.holds.clear();
+    setTargets([]);
+    document.body.classList.remove('ingame', 'padmode');
+    $('bar').hidden = false; $('mini').hidden = false; $('hud').hidden = true;
+    for (const m of [...held]) noteOff(m);
+    requestAnimationFrame(() => layout(false));
+  }
+  // Sonidos de acierto y error en el celular
+  function sfx(kind) {
+    if (!ctx) return;
+    if (kind === 'ok') chime([hz(88), hz(95)], 0.05, 0.07);
+    else if (kind === 'great') chime([hz(84), hz(91), hz(96)], 0.045, 0.08);
+    else {
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator(); o.type = 'triangle';
+      o.frequency.setValueAtTime(kind === 'bad' ? 300 : 240, t);
+      o.frequency.exponentialRampToValueAtTime(kind === 'bad' ? 170 : 150, t + 0.25);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.12, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(g).connect(master); o.start(t); o.stop(t + 0.32);
+    }
+  }
+  function padFx(d) {
+    const k = keyScreen(d.midi);
+    const theme = state.theme === 'princess' ? 'princess' : 'normal';
+    if (d.k === 'perfect' || d.k === 'great' || d.k === 'good') {
+      sparkle(k.x, k.top + 30, noteColor(d.midi), d.k === 'perfect' ? 16 : 10, d.k === 'perfect' ? 1.3 : 0.9);
+      floatText(JUDGE_TXT[d.k][theme], k.x, k.top + 60, d.k === 'perfect' ? '#ffe066' : d.k === 'great' ? '#9cf6ff' : '#ffffff', 24);
+      sfx(d.k === 'perfect' ? 'great' : 'ok');
+    } else if (d.k === 'wrong') {
+      floatText(d.txt || '¡Ups! Probá otra 💫', k.x, k.top + 60, '#ffb3c6', 20);
+      setTargets(game.targets, true);
+      sfx('bad');
+    } else if (d.k === 'miss') {
+      floatText('Ups', k.x, k.top + 60, '#ffb3c6', 18); sfx('miss');
+    } else if (d.k === 'short' || d.k === 'long') {
+      floatText(d.k === 'short' ? '⚡ ¡Más largo!' : '⏳ ¡Más corto!', k.x, k.top + 60, '#ffd6a5', 22); sfx('bad');
+    }
+  }
+  function drawPadHolds() {
+    const r = kb.getBoundingClientRect();
+    const fontFam = getComputedStyle(document.body).fontFamily;
+    for (const h of [...ctrl.holds.values()]) {
+      if (now() - h.pressReal > h.dur * 1.6 + 400) { ctrl.holds.delete(h.midi); continue; }
+      drawHoldBar(fctx, h, r.top + 44, fontFam);
+    }
+  }
+  function padEnd(d) {
+    ctrl.holds.clear(); setTargets([]);
+    const stats = [['🎹', 'Tus puntos', d.mine.toLocaleString('es-AR')], ['🤝', 'Equipo', d.team.toLocaleString('es-AR')]];
+    showResults(d.stars, stats, false, d.mine, d.title);
+    $('resDuo').hidden = true;
+  }
+
+  // ---- Interfaz ----
+  $('btnTvMode').onclick = () => tvStart();
+  $('tvFull').onclick = () => fsEl() ? exitFullscreen() : enterFullscreen();
+  $('tvExit').onclick = () => {
+    try { tv.peer?.destroy(); } catch {}
+    tv.role = null; tv.pads = [];
+    document.body.classList.remove('tvmode');
+    hide('tvOverlay');
+  };
+
   // ================== Controles generales ==================
   function show(id) { $(id).classList.add('show'); }
   function hide(id) { $(id).classList.remove('show'); }
-  function hideAll() { ['pickerOverlay', 'pauseOverlay', 'resultOverlay', 'duoOverlay'].forEach(hide); fx.style.zIndex = 30; }
+  function hideAll() { ['pickerOverlay', 'pauseOverlay', 'resultOverlay', 'duoOverlay', 'tvOverlay'].forEach(hide); fx.style.zIndex = 30; }
   function status(t) { $('status').textContent = t; }
   let toastT;
   function toast(t, ms = 3500) {
@@ -1774,6 +2135,7 @@
     hide('startOverlay');
     if (full && fsSupported()) enterFullscreen(); else if (full) iosHint();
     checkOrientation();
+    if ((tv.role === 'pad' && tv.connected) || duo.connected) openPicker();
   }
   $('btnStart').onclick = () => start(false);
   $('btnStartFull').onclick = () => start(true);
@@ -1835,9 +2197,17 @@
   renderSustain();
   renderLabels();
   show('startOverlay');
+  {
+    const qs = new URLSearchParams(location.search);
+    const sala = qs.get('sala'), tele = qs.get('tele');
+    if (qs.has('tv')) tvStart();
+    else if (tele) { padJoin(tele); $('startHint').textContent = '📺 Conectando con la tele…'; }
+    else if (sala) { duoJoin(sala); $('startHint').textContent = '📱📱 Conectando a la sala…'; }
+    if (sala || tele) history.replaceState(null, '', location.pathname + (duo.local ? '?duotest' : ''));
+  }
 
   // Ganchos para pruebas automáticas
-  window.__piano = { game, noteOn, noteOff, gameTime, SONGS, startGame, keyScreen, duo };
+  window.__piano = { game, noteOn, noteOff, gameTime, SONGS, startGame, keyScreen, duo, tv, ctrl };
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

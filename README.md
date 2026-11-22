@@ -13,6 +13,8 @@ Piano web de 88 teclas (La0 a Do8), pensado para tocar en el celular en horizont
   - En **Difícil** se tocan las dos manos a la vez: acordes de 2 o más teclas (multitáctil), con la mano izquierda real de cada pieza o acordes de acompañamiento.
   - La vista pentagrama usa notación estándar: gran pentagrama (clave de Sol y de Fa), figuras, corcheas unidas con barra, puntillos, sostenidos y silencios. Mientras tocás, se ve qué figura es (negra, blanca, corchea…).
   - **📱📱 Dos manos**: dos dispositivos conectados con un código de 4 números; uno toca la mano derecha y el otro la izquierda (conexión WebRTC con PeerJS, necesita internet en los dos).
+  - **Unirse con QR**: la sala muestra un código QR; escaneándolo con la cámara se abre la app ya conectada.
+  - **📺 Modo tele**: abrí la app en la tele y tocá "Usar como tele" (o entrá con `?tv`). La tele muestra el juego y un QR; cada celular que lo escanea se vuelve un teclado (el primero mano derecha, el segundo izquierda) y suena por su cuenta: melodía, acierto y error.
   - **Adivinar**: aparece una nota en el pentagrama y hay que tocar la tecla correcta (3 niveles, con sostenidos en el difícil).
   - Tempo ajustable (40% a 150%), 🎧 escuchar la canción antes, estrellas y récord por canción, rangos por estrellas totales.
 - **Estilo princesa 👑 / normal 🌙**: cambia colores, tipografía, estrellitas y efectos.

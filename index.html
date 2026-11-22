@@ -68,8 +68,10 @@
     <div style="font-size:54px" id="startIcon">🎹</div>
     <h2 id="startTitle">Piano de 88 teclas</h2>
     <p>Deslizá el recuadro de abajo para moverte por el teclado.<br>Tocá <b>🎮 Jugar</b> para aprender canciones.</p>
+    <p id="startHint" class="hint"></p>
     <button class="btn on" id="btnStartFull">Pantalla completa</button>
     <button class="btn" id="btnStart">Tocar así</button>
+    <div><button class="btn" id="btnTvMode" title="Usar este dispositivo como pantalla">📺 Usar como tele</button></div>
   </div>
 </div>
 
@@ -156,6 +158,7 @@
       </div>
     </div>
     <div id="duoWait" hidden>
+      <div class="qr" id="duoQr"></div>
       <div class="code" id="duoCodeShow"></div>
       <p id="duoWaitTxt"></p>
       <button class="btn" id="duoCancel">Cancelar</button>
@@ -169,6 +172,25 @@
     </div>
     <div class="err" id="duoErr"></div>
     <button class="btn" id="duoClose">Cerrar</button>
+  </div>
+</div>
+
+<!-- Modo tele -->
+<div class="overlay" id="tvOverlay">
+  <div class="card tv">
+    <h2>📺 Piano mágico en la tele</h2>
+    <div class="tvrow">
+      <div class="qr big" id="tvQr"></div>
+      <div class="tvinfo">
+        <p id="tvHint"></p>
+        <div class="code" id="tvCode">…</div>
+        <div class="tvpads" id="tvPads"></div>
+        <p class="small">Cada celular o tablet es un teclado: el primero toca la mano derecha y el segundo la izquierda. El sonido sale de cada celular.</p>
+      </div>
+    </div>
+    <div class="err" id="tvErr"></div>
+    <button class="btn" id="tvFull">Pantalla completa</button>
+    <button class="btn" id="tvExit">Salir del modo tele</button>
   </div>
 </div>
 
