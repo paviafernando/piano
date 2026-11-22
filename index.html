@@ -94,13 +94,19 @@
       <div class="seg" id="modeSeg">
         <button data-mode="learn">🎓 Aprender<small>Las notas te esperan</small></button>
         <button data-mode="rhythm">🎯 Desafío<small>Tocá justo a tiempo</small></button>
+        <button data-mode="guess">🔮 Adivinar<small>Leé la nota</small></button>
       </div>
-      <label class="tempo">🐢 <input type="range" id="tempo" min="0.4" max="1.5" step="0.05" value="1"> 🐇 <b id="tempoLbl">100%</b></label>
+      <label class="tempo" id="tempoBox">🐢 <input type="range" id="tempo" min="0.4" max="1.5" step="0.05" value="1"> 🐇 <b id="tempoLbl">100%</b></label>
     </div>
     <div class="tabs" id="levelTabs">
       <button class="btn" data-level="1">🌱 Fácil</button>
       <button class="btn" data-level="2">🌸 Medio</button>
       <button class="btn" data-level="3">🔥 Difícil</button>
+      <div class="spacer"></div>
+      <div class="seg small" id="viewSeg" title="Cómo ver las notas">
+        <button data-view="blocks">🟪 Bloques</button>
+        <button data-view="staff">🎼 Pentagrama</button>
+      </div>
     </div>
     <div class="songs" id="songList"></div>
   </div>

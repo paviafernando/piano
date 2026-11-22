@@ -165,6 +165,7 @@
     keyEls[midi]?.classList.remove('down');
     if (state.sustain && !game.active) sustained.add(midi); else stopVoice(midi);
     drawMini();
+    if (game.active) gameRelease(midi);
   }
   function releaseSustain() {
     for (const m of sustained) if (!held.has(m)) stopVoice(m, 0.6);
@@ -539,19 +540,33 @@
     releaseSustain();
     hideAll();
     game.active = true; game.ended = false; game.paused = false; game.waiting = false;
-    game.song = song; game.mode = mode;
+    game.song = song; game.mode = mode; game.holding = null; game.view = 'blocks';
     game.tempo = parseFloat($('tempo').value) || 1;
-    game.msBeat = 60000 / (song.bpm * game.tempo);
-    game.notes = song.parsed.map((n, i) => ({
-      i, midi: n.midi, ms: LEAD + n.beat * game.msBeat, dur: n.beats * game.msBeat,
-      state: 'pending', mist: false,
-    }));
-    const mids = game.notes.map(n => n.midi);
+    if (mode === 'guess') {
+      game.view = 'staff';
+      game.tempo = 1;
+      const pool = GUESS_POOLS[song.level];
+      game.notes = [];
+      for (let i = 0; i < GUESS_LEN; i++) {
+        let m;
+        do { m = pool[Math.floor(Math.random() * pool.length)]; } while (i && m === game.notes[i - 1].midi);
+        game.notes.push({ i, midi: m, ms: 0, dur: 0, beats: 1, state: 'pending', mist: 0 });
+      }
+      game.qStart = 0; game.lockUntil = 0; game.answerTimes = [];
+    } else {
+      if (mode === 'learn') game.view = store.get('view', 'blocks');
+      game.msBeat = 60000 / (song.bpm * game.tempo);
+      game.notes = song.parsed.map((n, i) => ({
+        i, midi: n.midi, ms: LEAD + n.beat * game.msBeat, dur: n.beats * game.msBeat, beats: n.beats,
+        state: 'pending', mist: false,
+      }));
+    }
+    const mids = mode === 'guess' ? GUESS_POOLS[song.level] : game.notes.map(n => n.midi);
     game.lo = Math.min(...mids); game.hi = Math.max(...mids);
     // Velocidad de caída: más lenta en modo aprender y con tempo lento
     game.look = mode === 'learn' ? 2600 : Math.max(1500, Math.min(2600, 2200 / Math.sqrt(game.tempo)));
     game.score = 0; game.combo = 0; game.maxCombo = 0; game.mistakes = 0; game.idx = 0;
-    game.counts = { perfect: 0, great: 0, good: 0, miss: 0 };
+    game.counts = { perfect: 0, great: 0, good: 0, miss: 0, short: 0, long: 0 };
     game.lastTarget = null; game.endAt = 0;
     game.start = now(); game.hold = null;
     document.body.classList.add('ingame');
@@ -587,7 +602,7 @@
     $('hudScore').textContent = '⭐ ' + game.score.toLocaleString('es-AR');
     const c = game.combo;
     $('hudCombo').textContent = c >= 2 ? `🔥 ${c}${mult() > 1 ? ' ×' + mult() : ''}` : '';
-    const done = game.mode === 'learn' ? game.idx : game.notes.filter(n => n.state !== 'pending').length;
+    const done = game.mode !== 'rhythm' ? game.idx : game.notes.filter(n => n.state !== 'pending').length;
     $('hudProg').style.width = (done / game.notes.length * 100) + '%';
     if (bumpScore) { const s = $('hudScore'); s.classList.remove('bump'); void s.offsetWidth; s.classList.add('bump'); }
   }
@@ -621,22 +636,56 @@
     updateHud();
   }
 
+  // Tolerancias para la duración de la nota en modo Aprender
+  const holdTol = dur => ({ perfect: Math.max(dur * 0.2, 110), good: Math.max(dur * 0.38, 180) });
+
+  function judgeHold(n, heldMs) {
+    game.holding = null;
+    const tol = holdTol(n.dur);
+    const err = heldMs - n.dur;
+    const k = keyScreen(n.midi);
+    if (Math.abs(err) <= tol.good) {
+      const kind = Math.abs(err) <= tol.perfect ? 'perfect' : 'good';
+      game.counts[kind]++;
+      onHit(n, kind, kind === 'perfect' ? 100 : 60);
+      if (n.mist) { game.combo = 0; updateHud(); }
+    } else {
+      n.durBad = true;
+      const short = err < 0;
+      game.counts[short ? 'short' : 'long']++;
+      game.combo = 0;
+      floatText(short ? '⚡ ¡Más largo!' : '⏳ ¡Más corto!', k.x, k.top - 40, '#ffd6a5', 22);
+      updateHud();
+    }
+  }
+
+  function gameRelease(m) {
+    if (game.mode !== 'learn' || !game.holding || game.holding.midi !== m) return;
+    judgeHold(game.holding, now() - game.holding.pressReal);
+  }
+
   function gamePress(m) {
     if (!game.active || game.paused || game.ended) return;
+    if (game.mode === 'guess') return guessPress(m);
     const t = gameTime();
     if (game.mode === 'learn') {
       const n = game.notes[game.idx];
+      // Si tocó otra tecla mientras mantenía la anterior, se mide la anterior hasta acá
+      if (game.holding && game.holding.midi !== m) judgeHold(game.holding, now() - game.holding.pressReal);
       if (!n) return;
       const early = n.ms - t;
       if (m === n.midi && (game.waiting || early < 700)) {
         n.state = 'hit';
-        const pts = n.mist ? 50 : 100;
-        if (n.mist) game.combo = 0;
+        n.pressReal = now();
+        game.holding = n;
+        game.score += n.mist ? 20 : 50;
         game.idx++;
-        // Seguir desde el tiempo de esta nota
+        // Sigue el tiempo desde esta nota: la barra muestra cuánto mantenerla
         game.start = now() - n.ms; game.hold = null; game.waiting = false;
-        onHit(n, n.mist ? 'good' : 'perfect', pts);
+        const k = keyScreen(n.midi);
+        sparkle(k.x, k.top, noteColor(n.midi), 8, 0.8);
         setTarget(null);
+        updateHud(true);
       } else if (game.waiting || early < 700) {
         if (!n.mist) game.mistakes++;
         n.mist = true;
@@ -660,15 +709,59 @@
     onHit(best, kind, kind === 'perfect' ? 300 : kind === 'great' ? 200 : 100);
   }
 
+  // ---- Adivinar notas ----
+  const GUESS_LEN = 15;
+  const range = (a, b, whitesOnly) => { const r = []; for (let m = a; m <= b; m++) if (!whitesOnly || !isBlack(m)) r.push(m); return r; };
+  const GUESS_POOLS = { 1: range(60, 72, true), 2: range(57, 79, true), 3: range(55, 84, false) };
+  const GUESS_LEVELS = [
+    { id: 'guess1', name: 'Adivinar: Do a Do', emoji: '🔮', level: 1, desc: 'Notas blancas del Do central al Do de arriba' },
+    { id: 'guess2', name: 'Adivinar: más notas', emoji: '🔮', level: 2, desc: 'Blancas de La3 a Sol5, con líneas adicionales' },
+    { id: 'guess3', name: 'Adivinar: con sostenidos', emoji: '🔮', level: 3, desc: 'De Sol3 a Do6, también teclas negras (♯)' },
+  ];
+
+  function guessPress(m) {
+    const n = game.notes[game.idx];
+    if (!n || now() < game.lockUntil || !game.qStart) return;
+    const k = keyScreen(n.midi);
+    if (m === n.midi) {
+      const el = now() - game.qStart;
+      game.answerTimes.push(el);
+      const speed = Math.max(0, Math.round(100 - Math.max(0, el - 1200) / 40));
+      game.counts[n.mist ? 'good' : 'perfect']++;
+      n.state = 'hit';
+      onHit(n, n.mist ? 'good' : (el < 2500 ? 'perfect' : 'great'), (n.mist ? 40 : 100) + (n.mist ? 0 : speed));
+      if (n.mist) { game.combo = 0; updateHud(); }
+      floatText(noteName(n.midi), k.x, k.top - 80, '#fff', 30, 45);
+      game.idx++;
+      game.lockUntil = now() + 450;
+      game.qStart = 0;
+      setTarget(null);
+      if (game.idx >= game.notes.length) game.endAt = now() + 700;
+    } else {
+      n.mist++;
+      if (n.mist === 1) game.mistakes++;
+      game.combo = 0;
+      const wk = keyScreen(m);
+      const sameName = m % 12 === n.midi % 12;
+      floatText(sameName ? `¡Es ${noteName(m)}! Pero ${m < n.midi ? 'más aguda ⬆' : 'más grave ⬇'}` : '¡Ups! Probá otra 💫', wk.x, wk.top - 30, '#ffb3c6', 19);
+      if (n.mist >= 2) setTarget(n.midi, true);
+      updateHud();
+    }
+  }
+
   function gameTick() {
     if (game.paused || game.ended) return;
     const t = gameTime();
-    if (game.mode === 'learn') {
+    if (game.mode === 'guess') {
+      if (!game.qStart && game.idx < game.notes.length && now() >= game.lockUntil && t > 900) game.qStart = now();
+    } else if (game.mode === 'learn') {
+      const h = game.holding;
+      if (h && now() - h.pressReal > h.dur + holdTol(h.dur).good) judgeHold(h, now() - h.pressReal);
       const n = game.notes[game.idx];
       if (n) {
         if (!game.waiting && t >= n.ms) { game.waiting = true; game.hold = n.ms; }
         if (n.ms - t < 1500) { if (game.lastTarget !== n.midi) setTarget(n.midi); }
-      } else if (!game.endAt) game.endAt = now() + 700;
+      } else if (!game.endAt && !game.holding) game.endAt = now() + 700;
     } else {
       let target = null, td = 1e9;
       for (const n of game.notes) {
@@ -687,6 +780,123 @@
 
   // Fondo con estrellitas titilantes
   const SKY = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random(), r: 0.6 + Math.random() * 1.8, p: Math.random() * 6 }));
+
+  // ---- Pentagrama ----
+  // Posición en el pentagrama: letra (Do=0 … Si=6) + octava*7, y si lleva sostenido
+  const PC_STEP = [[0,0],[0,1],[1,0],[1,1],[2,0],[3,0],[3,1],[4,0],[4,1],[5,0],[5,1],[6,0]];
+  const staffStep = m => PC_STEP[m % 12][0] + octaveOf(m) * 7;
+  const hasSharp = m => PC_STEP[m % 12][1] === 1;
+  const MID = 34; // Si4, línea del medio en clave de Sol
+
+  function drawNote(c, x, m, beats, color, gap, yOf, ink, opts = {}) {
+    const step = staffStep(m), y = yOf(step);
+    const rx = gap * 0.66, ry = gap * 0.47;
+    c.strokeStyle = ink; c.lineWidth = Math.max(1.2, gap * 0.11);
+    // Líneas adicionales
+    const ledger = s => { c.beginPath(); c.moveTo(x - rx * 1.7, yOf(s)); c.lineTo(x + rx * 1.7, yOf(s)); c.stroke(); };
+    for (let s = 28; s >= step; s -= 2) ledger(s);
+    for (let s = 40; s <= step; s += 2) ledger(s);
+    if (opts.halo) {
+      c.fillStyle = opts.halo; c.globalAlpha *= 0.35;
+      c.beginPath(); c.arc(x, y, gap * 1.6, 0, 7); c.fill();
+      c.globalAlpha /= 0.35;
+    }
+    const dotted = [0.75, 1.5, 3].includes(beats) || beats === 2.5;
+    const base = [0.75, 1.5, 3].includes(beats) ? beats / 1.5 : beats === 2.5 ? 2 : beats;
+    const hollow = base >= 2;
+    c.save(); c.translate(x, y); c.rotate(-0.35);
+    c.beginPath(); c.ellipse(0, 0, rx, ry, 0, 0, 7);
+    if (hollow) { c.fillStyle = '#fff'; c.fill(); c.lineWidth = gap * 0.22; c.strokeStyle = color; c.stroke(); c.lineWidth = Math.max(1, gap * 0.08); c.strokeStyle = ink; c.stroke(); }
+    else { c.fillStyle = color; c.fill(); c.lineWidth = Math.max(1, gap * 0.08); c.strokeStyle = ink; c.stroke(); }
+    c.restore();
+    c.strokeStyle = ink; c.lineWidth = Math.max(1.2, gap * 0.12);
+    if (base < 4) {
+      const up = step < MID;
+      const sx = up ? x + rx * 0.9 : x - rx * 0.9;
+      const ey = up ? y - gap * 3.4 : y + gap * 3.4;
+      c.beginPath(); c.moveTo(sx, y); c.lineTo(sx, ey); c.stroke();
+      const flags = base <= 0.25 ? 2 : base <= 0.5 ? 1 : 0;
+      for (let f = 0; f < flags; f++) {
+        const fy = ey + (up ? 1 : -1) * f * gap * 0.8;
+        c.beginPath(); c.moveTo(sx, fy);
+        c.quadraticCurveTo(sx + gap * 1.3, fy + (up ? 1 : -1) * gap * 1.1, sx + gap * 0.9, fy + (up ? 1 : -1) * gap * 2.2);
+        c.stroke();
+      }
+    }
+    if (dotted) {
+      c.fillStyle = ink;
+      c.beginPath(); c.arc(x + rx + gap * 0.5, step % 2 === 0 ? y - gap * 0.4 : y, gap * 0.17, 0, 7); c.fill();
+    }
+    if (hasSharp(m)) {
+      c.fillStyle = ink; c.font = `700 ${Math.round(gap * 2)}px serif`;
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText('♯', x - rx - gap * 0.85, y);
+    }
+  }
+
+  function drawStaff(c, left, top, width, h, t, princess, fontFam) {
+    const pad = 6;
+    c.fillStyle = princess ? '#fff3fa' : '#f7f3ea';
+    roundRect(c, left + pad, top + pad, width - pad * 2, h - pad * 2, 14); c.fill();
+    const gap = Math.max(7, Math.min(16, (h - 26) / 12));
+    const midY = top + h * 0.46;
+    const yOf = s => midY - (s - MID) * gap / 2;
+    const lineCol = princess ? '#c77dff' : '#555';
+    const ink = princess ? '#3c096c' : '#1a1a1a';
+    c.strokeStyle = lineCol; c.lineWidth = 1.4;
+    for (const s of [30, 32, 34, 36, 38]) { c.beginPath(); c.moveTo(left + 14, yOf(s)); c.lineTo(left + width - 14, yOf(s)); c.stroke(); }
+    // Clave de Sol
+    c.fillStyle = ink; c.font = `${Math.round(gap * 6.2)}px "Noto Music", "Segoe UI Symbol", "Apple Symbols", serif`;
+    c.textAlign = 'left'; c.textBaseline = 'middle';
+    c.fillText('𝄞', left + 16, yOf(32) - gap * 0.2);
+    const playX = left + Math.max(80, width * 0.2);
+    const names = width > 500;
+
+    if (game.mode === 'guess') {
+      const n = game.notes[game.idx];
+      if (n && game.qStart) drawNote(c, left + width * 0.55, n.midi, 1, noteColor(n.midi), gap * 1.15, yOf, ink, { halo: princess ? '#ff9ad5' : '#ffd166' });
+      return;
+    }
+    // Cursor de lectura
+    c.strokeStyle = princess ? '#ff4fa3' : '#e8b14a'; c.lineWidth = 3;
+    c.shadowColor = c.strokeStyle; c.shadowBlur = 10;
+    c.beginPath(); c.moveTo(playX, yOf(44)); c.lineTo(playX, yOf(24)); c.stroke();
+    c.shadowBlur = 0;
+    const pxms = (left + width - 20 - playX) / 3400;
+    for (const n of game.notes) {
+      const x = playX + (n.ms - t) * pxms;
+      if (x < left + 70) continue;
+      if (x > left + width + 20) break;
+      const isNext = n.i === game.idx;
+      c.globalAlpha = n.state === 'hit' ? 0.4 : 1;
+      drawNote(c, x, n.midi, n.beats, noteColor(n.midi), gap, yOf, ink, isNext ? { halo: noteColor(n.midi) } : {});
+      if (names) {
+        c.fillStyle = princess ? '#a0306e' : '#555'; c.font = `700 12px ${fontFam}`;
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText(noteName(n.midi), x, top + h - 16);
+      }
+      c.globalAlpha = 1;
+    }
+  }
+
+  function drawHoldBar(c, n, bottom, fontFam) {
+    const held = now() - n.pressReal;
+    const k = keyScreen(n.midi);
+    const w = Math.max(56, k.w - 6), x = k.x - w / 2, y = bottom - 16, bh = 9;
+    const tol = holdTol(n.dur);
+    const okFrom = (n.dur - tol.good) / n.dur, okTo = (n.dur + tol.good) / n.dur;
+    const ratio = held / n.dur;
+    const scale = Math.max(1.6, okTo + 0.1);
+    c.fillStyle = 'rgba(0,0,0,.35)'; roundRect(c, x - 2, y - 2, w + 4, bh + 4, 6); c.fill();
+    c.fillStyle = 'rgba(120,255,160,.35)';
+    c.fillRect(x + w * okFrom / scale, y, w * (okTo - okFrom) / scale, bh);
+    c.fillStyle = ratio < okFrom ? '#ffd166' : ratio <= okTo ? '#5fe38d' : '#ff6b6b';
+    roundRect(c, x, y, Math.min(w, w * ratio / scale), bh, 4); c.fill();
+    c.fillStyle = '#fff'; c.fillRect(x + w / scale - 1, y - 3, 2, bh + 6);
+    c.font = `800 13px ${fontFam}`; c.textAlign = 'center'; c.textBaseline = 'bottom';
+    c.fillStyle = '#fff';
+    c.fillText(ratio < okFrom ? 'Mantené… ⏳' : '¡Soltá! ✋', k.x, y - 4);
+  }
 
   function drawLane() {
     const sr = stage.getBoundingClientRect();
@@ -712,58 +922,64 @@
     }
     c.globalAlpha = 1;
 
-    // Carriles tenues de las teclas usadas
-    const used = new Set(game.notes.map(n => n.midi));
-    for (const m of used) {
-      const k = keyScreen(m);
-      c.fillStyle = princess ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.04)';
-      c.fillRect(k.left + 1, top, k.w - 2, h);
-    }
-
-    // Línea de golpe
-    const hitY = bottom - 2;
-    const lg = c.createLinearGradient(left, 0, left + width, 0);
-    if (princess) { lg.addColorStop(0, '#ffd166'); lg.addColorStop(0.5, '#fff'); lg.addColorStop(1, '#ffd166'); }
-    else { lg.addColorStop(0, '#e8b14a'); lg.addColorStop(1, '#e8b14a'); }
-    c.fillStyle = lg; c.shadowColor = princess ? '#ffd1ea' : '#e8b14a'; c.shadowBlur = 12;
-    c.fillRect(left, hitY - 2, width, 4);
-    c.shadowBlur = 0;
-
-    // Notas que caen
     const t = gameTime();
-    const pxms = (h - 6) / game.look;
     const fontFam = getComputedStyle(document.body).fontFamily;
-    for (const n of game.notes) {
-      if (n.state === 'hit' && t - n.ms > 120) continue;
-      const yBottom = hitY - (n.ms - t) * pxms;
-      const hgt = Math.max(22, n.dur * pxms - 4);
-      const yTop = yBottom - hgt;
-      if (yTop > bottom || yBottom < top - 4) { if (n.ms - t > game.look) break; continue; }
-      const k = keyScreen(n.midi);
-      const pad = Math.max(2, k.w * 0.1);
-      const x = k.left + pad, w = k.w - pad * 2;
-      const col = noteColor(n.midi);
-      c.globalAlpha = n.state === 'miss' ? 0.3 : n.state === 'hit' ? 0.5 : 1;
-      const isNext = game.mode === 'learn' && n.i === game.idx;
-      c.shadowColor = col; c.shadowBlur = isNext ? 22 : 10;
-      const ng = c.createLinearGradient(0, yTop, 0, yBottom);
-      ng.addColorStop(0, princess ? '#fff' : col); ng.addColorStop(princess ? 0.25 : 0.6, col); ng.addColorStop(1, col);
-      c.fillStyle = ng;
-      roundRect(c, x, yTop, w, hgt, princess ? Math.min(14, w / 2) : 6);
-      c.fill();
-      c.shadowBlur = 0;
-      if (princess) { c.fillStyle = 'rgba(255,255,255,.9)'; drawStar(c, x + w / 2, yBottom - 11, Math.min(8, w / 4), tt * 2); }
-      if (w >= 22 && hgt >= 22) {
-        c.fillStyle = princess ? '#5a0e44' : '#111';
-        c.font = `700 ${Math.min(14, Math.round(w / 2.6))}px ${fontFam}`;
-        c.textAlign = 'center'; c.textBaseline = 'middle';
-        c.fillText(noteName(n.midi), x + w / 2, princess ? yBottom - 26 : yBottom - 12);
+    if (game.view === 'staff') drawStaff(c, left, top, width, h, t, princess, fontFam);
+    else {
+      // Carriles tenues de las teclas usadas
+      const used = new Set(game.notes.map(n => n.midi));
+      for (const m of used) {
+        const k = keyScreen(m);
+        c.fillStyle = princess ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.04)';
+        c.fillRect(k.left + 1, top, k.w - 2, h);
       }
-      c.globalAlpha = 1;
+
+      // Línea de golpe
+      const hitY = bottom - 2;
+      const lg = c.createLinearGradient(left, 0, left + width, 0);
+      if (princess) { lg.addColorStop(0, '#ffd166'); lg.addColorStop(0.5, '#fff'); lg.addColorStop(1, '#ffd166'); }
+      else { lg.addColorStop(0, '#e8b14a'); lg.addColorStop(1, '#e8b14a'); }
+      c.fillStyle = lg; c.shadowColor = princess ? '#ffd1ea' : '#e8b14a'; c.shadowBlur = 12;
+      c.fillRect(left, hitY - 2, width, 4);
+      c.shadowBlur = 0;
+
+      // Notas que caen
+      const pxms = (h - 6) / game.look;
+      for (const n of game.notes) {
+        if (n.state === 'hit' && t - n.ms > (game.mode === 'learn' ? n.dur : 120)) continue;
+        const yBottom = hitY - (n.ms - t) * pxms;
+        const hgt = Math.max(22, n.dur * pxms - 4);
+        const yTop = yBottom - hgt;
+        if (yTop > bottom || yBottom < top - 4) { if (n.ms - t > game.look) break; continue; }
+        const k = keyScreen(n.midi);
+        const pad = Math.max(2, k.w * 0.1);
+        const x = k.left + pad, w = k.w - pad * 2;
+        const col = noteColor(n.midi);
+        c.globalAlpha = n.state === 'miss' ? 0.3 : n.state === 'hit' ? (game.mode === 'learn' ? 0.8 : 0.5) : 1;
+        const isNext = game.mode === 'learn' && n.i === game.idx;
+        c.shadowColor = col; c.shadowBlur = isNext ? 22 : 10;
+        const ng = c.createLinearGradient(0, yTop, 0, yBottom);
+        ng.addColorStop(0, princess ? '#fff' : col); ng.addColorStop(princess ? 0.25 : 0.6, col); ng.addColorStop(1, col);
+        c.fillStyle = ng;
+        roundRect(c, x, yTop, w, hgt, princess ? Math.min(14, w / 2) : 6);
+        c.fill();
+        c.shadowBlur = 0;
+        if (princess) { c.fillStyle = 'rgba(255,255,255,.9)'; drawStar(c, x + w / 2, yBottom - 11, Math.min(8, w / 4), tt * 2); }
+        if (w >= 22 && hgt >= 22) {
+          c.fillStyle = princess ? '#5a0e44' : '#111';
+          c.font = `700 ${Math.min(14, Math.round(w / 2.6))}px ${fontFam}`;
+          c.textAlign = 'center'; c.textBaseline = 'middle';
+          c.fillText(noteName(n.midi), x + w / 2, princess ? yBottom - 26 : yBottom - 12);
+        }
+        c.globalAlpha = 1;
+      }
     }
+
+    // Barra de cuánto mantener la nota (Aprender)
+    if (game.mode === 'learn' && game.holding) drawHoldBar(c, game.holding, bottom, fontFam);
 
     // Cuenta regresiva
-    if (t < LEAD) {
+    if (t < LEAD && game.mode !== 'guess') {
       const sec = Math.ceil((LEAD - t) / (LEAD / 3));
       const txt = t > LEAD - 300 ? '¡Ya!' : String(Math.max(1, sec));
       c.font = `800 ${Math.round(h * 0.4)}px ${fontFam}`;
@@ -773,9 +989,14 @@
       c.fillText(txt, left + width / 2, top + h / 2);
       c.shadowBlur = 0; c.globalAlpha = 1;
     }
+    if (game.mode === 'guess' && game.qStart) {
+      c.font = `700 16px ${fontFam}`; c.textAlign = 'center';
+      c.fillStyle = princess ? '#7b2cbf' : '#333';
+      c.fillText(princess ? '🔮 ¿Qué nota es? ✨' : '¿Qué nota es?', left + width / 2, top + 22);
+    }
     if (game.mode === 'learn' && game.waiting) {
       c.font = `700 16px ${fontFam}`; c.textAlign = 'center';
-      c.fillStyle = 'rgba(255,255,255,.85)';
+      c.fillStyle = game.view === 'staff' ? (princess ? '#7b2cbf' : '#333') : 'rgba(255,255,255,.85)';
       c.fillText(state.theme === 'princess' ? '✨ Tocá la tecla que brilla ✨' : 'Tocá la tecla que brilla', left + width / 2, top + 22);
     }
     c.restore();
@@ -804,6 +1025,7 @@
   function totalStars() {
     let s = 0;
     for (const song of SONGS) for (const mode of ['learn', 'rhythm']) s += (getBest(mode, song.id)?.stars || 0);
+    for (const g of GUESS_LEVELS) s += (getBest('guess', g.id)?.stars || 0);
     return s;
   }
   function rankFor(stars) {
@@ -822,9 +1044,15 @@
     const total = game.notes.length;
     let stars, stats;
     if (game.mode === 'learn') {
-      const clean = game.notes.filter(n => !n.mist).length / total;
-      stars = clean >= 0.9 ? 3 : clean >= 0.7 ? 2 : 1;
-      stats = [['🎯', 'Notas', total], ['💫', 'Errores', game.mistakes], ['🔥', 'Mejor combo', game.maxCombo]];
+      const c = game.counts;
+      const clean = game.notes.filter(n => !n.mist && !n.durBad).length / total;
+      stars = clean >= 0.85 ? 3 : clean >= 0.6 ? 2 : 1;
+      stats = [['💫', 'Tecla equivocada', game.mistakes], ['✨', 'Duración justa', c.perfect + c.good], ['⚡', 'Muy cortas', c.short], ['⏳', 'Muy largas', c.long], ['🔥', 'Combo', game.maxCombo]];
+    } else if (game.mode === 'guess') {
+      const first = game.notes.filter(n => !n.mist).length / total;
+      stars = first >= 0.9 ? 3 : first >= 0.7 ? 2 : 1;
+      const avg = game.answerTimes.length ? game.answerTimes.reduce((a, b) => a + b, 0) / game.answerTimes.length / 1000 : 0;
+      stats = [['🎯', 'A la primera', game.notes.filter(n => !n.mist).length + '/' + total], ['💫', 'Errores', game.mistakes], ['⏱️', 'Promedio', avg.toFixed(1) + ' s'], ['🔥', 'Racha', game.maxCombo]];
     } else {
       const c = game.counts;
       const acc = (c.perfect + c.great * 0.8 + c.good * 0.5) / total;
@@ -845,7 +1073,7 @@
       ? ['¡Seguí practicando! 🌷', '¡Bien hecho! 🌸', '¡Muy bien! 💖', '¡Increíble! 👑']
       : ['¡Seguí practicando!', '¡Bien hecho!', '¡Muy bien!', '¡Increíble!'];
     $('resTitle').textContent = titles[stars];
-    $('resSong').textContent = `${game.song.emoji} ${game.song.name} · ${game.mode === 'learn' ? 'Aprender' : 'Desafío'} · ${Math.round(game.tempo * 100)}%`;
+    $('resSong').textContent = game.mode === 'guess' ? `${game.song.emoji} ${game.song.name}` : `${game.song.emoji} ${game.song.name} · ${game.mode === 'learn' ? 'Aprender' : 'Desafío'} · ${Math.round(game.tempo * 100)}%`;
     $('resStats').innerHTML = stats.map(([e, l, v]) => `<div>${e} ${l}<b>${v}</b></div>`).join('');
     $('resRecord').hidden = !record;
     const starEls = [...$('resStars').children];
@@ -883,8 +1111,26 @@
     for (const b of $('modeSeg').children) b.classList.toggle('on', b.dataset.mode === pickMode);
     for (const b of $('levelTabs').children) b.classList.toggle('on', +b.dataset.level === pickLevel);
     $('tempoLbl').textContent = Math.round(parseFloat($('tempo').value) * 100) + '%';
+    $('tempoBox').style.visibility = pickMode === 'guess' ? 'hidden' : '';
+    $('viewSeg').hidden = pickMode !== 'learn';
+    const view = store.get('view', 'blocks');
+    for (const b of $('viewSeg').children) b.classList.toggle('on', b.dataset.view === view);
     const list = $('songList');
     list.innerHTML = '';
+    if (pickMode === 'guess') {
+      const g = GUESS_LEVELS[pickLevel - 1];
+      const best = getBest('guess', g.id);
+      const st = best?.stars || 0;
+      const card = document.createElement('div');
+      card.className = 'song wide';
+      card.innerHTML = `<div class="em">${g.emoji}</div>
+        <div><div class="nm">▶ ${g.name}</div><div class="ds">${g.desc}. Aparece una nota en el pentagrama: ¡tocá la tecla correcta!</div>
+        <div class="st">${[0,1,2].map(i => `<span class="${i < st ? '' : 'off'}">⭐</span>`).join('')}</div>
+        <div class="bs">${best ? 'Récord: ' + best.score.toLocaleString('es-AR') : '¡Nuevo!'}</div></div>`;
+      card.addEventListener('click', () => startGame(g, 'guess'));
+      list.appendChild(card);
+      return;
+    }
     for (const s of SONGS.filter(s => s.level === pickLevel)) {
       const best = getBest(pickMode, s.id);
       const st = best?.stars || 0;
@@ -904,8 +1150,12 @@
     const b = e.target.closest('button'); if (!b) return;
     pickMode = b.dataset.mode; store.set('pickMode', pickMode); renderPicker();
   });
-  $('levelTabs').addEventListener('click', e => {
+  $('viewSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
+    store.set('view', b.dataset.view); renderPicker();
+  });
+  $('levelTabs').addEventListener('click', e => {
+    const b = e.target.closest('button[data-level]'); if (!b) return;
     pickLevel = +b.dataset.level; store.set('pickLevel', pickLevel); renderPicker();
   });
   $('tempo').addEventListener('input', e => {
