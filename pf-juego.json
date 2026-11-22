@@ -1,0 +1,15 @@
+{
+  "id": "piano",
+  "name": "Piano mágico",
+  "emoji": "🎹",
+  "color": "#ff5fa2",
+  "group": "Música",
+  "order": 10,
+  "desc": "Aprendé canciones con bloques que caen o en pentagrama. ¡A dos manos con dos celulares!",
+  "tags": ["🎵 11 canciones", "👑 Estilo princesa"],
+  "url": "https://piano-alpha-ruby.vercel.app",
+  "players": { "min": 1, "max": 2 },
+  "tv": "/?tv&hub={code}",
+  "pad": "/?tele={code}&hub={code}",
+  "solo": "/"
+}
