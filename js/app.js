@@ -1680,6 +1680,11 @@
 
   // ================== Dos dispositivos (una mano cada uno) ==================
   const PEER_PREFIX = 'pianomagico-fp-';
+  // Índice PF Juegos: con ?hub=1234 la tele usa ese código y los celulares vuelven solos al índice.
+  const HUB_CODE = (new URLSearchParams(location.search).get('hub') || '').replace(/\D/g, '').slice(0, 4) || null;
+  const HUB_URL = 'https://pf-juegos.vercel.app';
+  const goHubTv = () => { try { tvBroadcast({ t: 'home' }); } catch {} setTimeout(() => { location.href = HUB_URL + '/?tv'; }, 250); };
+  const goHubPad = () => { location.href = HUB_URL + '/?j=' + HUB_CODE; };
   const duo = { peer: null, conn: null, connected: false, hand: 'right', code: null, rtt: 120, status: 'idle',
     local: new URLSearchParams(location.search).has('duotest') };
 
@@ -1855,10 +1860,11 @@
   const ctrl = { active: false, lo: 60, hi: 72, holds: new Map(), mode: 'learn' };
 
   // ---- Lado tele ----
-  async function tvStart() {
+  async function tvStart(tries = 0) {
     duoReset(); duo.status = 'idle';
     tv.role = 'tv'; tv.pads = [];
-    tv.code = String(Math.floor(1000 + Math.random() * 9000));
+    tv.code = HUB_CODE && tries < 5 ? HUB_CODE : String(Math.floor(1000 + Math.random() * 9000));
+    $('tvExit').textContent = HUB_CODE ? '🏠 Todos los juegos' : 'Salir del modo tele';
     document.body.classList.add('tvmode');
     hide('startOverlay'); hide('rotateOverlay');
     $('tvErr').textContent = '';
@@ -1869,7 +1875,10 @@
     const peer = new window.Peer(PEER_PREFIX + 'tv-' + tv.code);
     tv.peer = peer;
     peer.on('connection', c => tvAddConn(c));
-    peer.on('error', e => { if (e.type === 'unavailable-id') tvStart(); else $('tvErr').textContent = 'Error de conexión (' + e.type + ').'; });
+    peer.on('error', e => {
+      if (e.type === 'unavailable-id') { try { peer.destroy(); } catch {} setTimeout(() => tvStart(tries + 1), HUB_CODE && tries < 5 ? 1200 : 0); }
+      else $('tvErr').textContent = 'Error de conexión (' + e.type + ').';
+    });
   }
   function tvAddConn(c) {
     const pad = { id: 'p' + Math.random().toString(36).slice(2, 8), conn: c, hand: null };
@@ -2010,8 +2019,14 @@
     try { await loadPeer(); } catch { toast('No se pudo cargar la conexión. ¿Hay internet?', 4000); return; }
     const peer = new window.Peer();
     tv.peer = peer;
-    peer.on('open', () => padSetupConn(peer.connect(PEER_PREFIX + 'tv-' + code, { reliable: true })));
-    peer.on('error', e => toast(e.type === 'peer-unavailable' ? 'No encontré esa tele. Revisá el código.' : 'Error de conexión (' + e.type + ')', 4000));
+    let tries = 0;
+    const dial = () => padSetupConn(peer.connect(PEER_PREFIX + 'tv-' + code, { reliable: true }));
+    peer.on('open', dial);
+    peer.on('error', e => {
+      // Desde el índice, la tele puede tardar unos segundos en abrir el juego: reintento.
+      if (e.type === 'peer-unavailable' && HUB_CODE && tries++ < 20) { setTimeout(dial, 1500); return; }
+      toast(e.type === 'peer-unavailable' ? 'No encontré esa tele. Revisá el código.' : 'Error de conexión (' + e.type + ')', 4000);
+    });
   }
   function localPad(code) {
     const ch = new BroadcastChannel('piano-tv-' + code);
@@ -2031,6 +2046,7 @@
   function padSend(msg) { try { if (tv.conn) tv.conn.send(msg); } catch (e) { console.warn(e); } }
   function padOnClose() {
     if (!tv.connected) return;
+    if (HUB_CODE) { toast('🏠 Volviendo a los juegos…', 2000); setTimeout(goHubPad, 1200); }
     tv.connected = false; tv.conn = null;
     clearInterval(tv.pingT);
     toast('📺 Se desconectó la tele', 3000);
@@ -2054,6 +2070,7 @@
         break;
       }
       case 'full': toast('La tele ya tiene 2 teclados conectados', 3500); break;
+      case 'home': if (HUB_CODE) goHubPad(); break;
       case 'pong': {
         const rtt = now() - d.ts;
         if (rtt <= tv.bestRtt * 1.3) { tv.offset = d.tv + rtt / 2 - now(); tv.bestRtt = Math.min(tv.bestRtt, rtt); }
@@ -2155,6 +2172,7 @@
   };
   $('tvFull').onclick = () => fsEl() ? exitFullscreen() : enterFullscreen();
   $('tvExit').onclick = () => {
+    if (HUB_CODE) return goHubTv();
     try { tv.peer?.destroy(); } catch {}
     tv.role = null; tv.pads = [];
     document.body.classList.remove('tvmode');
