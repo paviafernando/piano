@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#141414">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Piano">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Piano</title>
+<style>
+  :root {
+    --bg: #141414;
+    --bar: #1d1d1d;
+    --accent: #e8b14a;
+    --text: #eee;
+    --muted: #8a8a8a;
+    --mini-h: 46px;
+    --bar-h: 46px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    touch-action: none;
+  }
+  #app {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* ---------- Barra superior ---------- */
+  #bar {
+    height: var(--bar-h); flex: 0 0 auto;
+    display: flex; align-items: center; gap: 6px; padding: 0 8px;
+    background: var(--bar); border-bottom: 1px solid #000;
+  }
+  .btn {
+    height: 34px; min-width: 34px; padding: 0 10px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: 1px solid #333; border-radius: 8px; background: #262626; color: var(--text);
+    font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .btn:active { background: #333; }
+  .btn.on { background: var(--accent); color: #1a1a1a; border-color: var(--accent); }
+  .btn svg { width: 18px; height: 18px; fill: currentColor; }
+  .spacer { flex: 1; }
+  .title { font-weight: 700; letter-spacing: .5px; font-size: 15px; margin-right: 4px; }
+  .title span { color: var(--accent); }
+  #status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vol { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+  .vol input { width: 80px; accent-color: var(--accent); }
+  @media (max-width: 640px) {
+    .title, .vol, #status { display: none; }
+    .btn { padding: 0 8px; font-size: 12px; }
+  }
+
+  /* ---------- Teclado ---------- */
+  #stage { position: relative; flex: 1 1 auto; overflow: hidden; background: #000; }
+  #keys { position: absolute; top: 0; left: 0; bottom: 0; will-change: transform; }
+  .white, .black { position: absolute; top: 0; display: flex; align-items: flex-end; justify-content: center; }
+  .white {
+    bottom: 0;
+    background: linear-gradient(#f2f2f2, #fff 70%, #e9e9e9);
+    border-right: 1px solid #999; border-radius: 0 0 6px 6px;
+    box-shadow: inset 0 -6px 0 #d4d4d4;
+    color: #777; font-size: 12px; font-weight: 600; padding-bottom: 12px;
+  }
+  .black {
+    height: 62%; z-index: 2;
+    background: linear-gradient(#222, #3a3a3a 85%, #1a1a1a);
+    border-radius: 0 0 5px 5px;
+    box-shadow: inset 0 -6px 0 #0c0c0c, 1px 2px 4px rgba(0,0,0,.6);
+    color: #bbb; font-size: 10px; padding-bottom: 10px;
+  }
+  .white.down { background: linear-gradient(#e6e6e6, #f4d99c); box-shadow: inset 0 -2px 0 #c9a55a; }
+  .black.down { background: linear-gradient(#111, #6b5426); box-shadow: inset 0 -2px 0 #000; }
+  .white.c-key { color: #444; }
+  .white .lbl, .black .lbl { pointer-events: none; }
+
+  /* ---------- Minimapa ---------- */
+  #mini {
+    height: var(--mini-h); flex: 0 0 auto; position: relative;
+    background: var(--bar); border-top: 1px solid #000; padding: 6px 8px;
+  }
+  #miniInner { position: relative; width: 100%; height: 100%; }
+  #miniCanvas { width: 100%; height: 100%; display: block; border-radius: 3px; }
+  #miniWin {
+    position: absolute; top: 0; bottom: 0;
+    border: 2px solid var(--accent); border-radius: 5px;
+    background: rgba(232,177,74,.18);
+    box-shadow: 0 0 0 9999px rgba(0,0,0,.35);
+    pointer-events: none;
+  }
+  #miniClip { position: absolute; inset: 0; overflow: hidden; border-radius: 3px; pointer-events: none; }
+
+  /* ---------- Overlays ---------- */
+  .overlay {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    align-items: center; justify-content: center; text-align: center;
+    background: rgba(10,10,10,.92); padding: 24px;
+  }
+  .overlay.show { display: flex; }
+  .card { max-width: 380px; }
+  .card h2 { margin: 12px 0 8px; font-size: 20px; }
+  .card p { color: #bbb; line-height: 1.45; margin: 0 0 18px; font-size: 15px; }
+  .card .btn { height: 42px; padding: 0 18px; font-size: 15px; margin: 4px; }
+  .rotate-icon { width: 64px; height: 64px; fill: var(--accent); animation: rot 2s ease-in-out infinite; }
+  @keyframes rot { 0%,20% { transform: rotate(0) } 50%,70% { transform: rotate(-90deg) } 100% { transform: rotate(0) } }
+  #toast {
+    position: fixed; left: 50%; top: 60px; transform: translateX(-50%); z-index: 60;
+    background: #2b2b2b; border: 1px solid #444; color: #eee; padding: 10px 14px; border-radius: 10px;
+    font-size: 14px; max-width: 90vw; text-align: center; opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <div class="title">PIANO<span>●</span></div>
+    <button class="btn" id="btnZoomOut" title="Teclas más chicas">
+      <svg viewBox="0 0 24 24"><path d="M5 11h14v2H5z"/></svg></button>
+    <button class="btn" id="btnZoomIn" title="Teclas más grandes">
+      <svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></button>
+    <button class="btn" id="btnSustain" title="Pedal de sustain">Pedal</button>
+    <button class="btn" id="btnLabels" title="Nombres de las notas">Notas: Do</button>
+    <div class="vol" title="Volumen">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+      <input type="range" id="vol" min="0" max="1" step="0.01" value="0.8">
+    </div>
+    <div class="spacer"></div>
+    <div id="status">Cargando sonido…</div>
+    <button class="btn" id="btnFull" title="Pantalla completa">
+      <svg id="icoFull" viewBox="0 0 24 24"><path d="M5 5h5v2H7v3H5V5zm9 0h5v5h-2V7h-3V5zM5 14h2v3h3v2H5v-5zm12 0h2v5h-5v-2h3v-3z"/></svg>
+      <svg id="icoExit" viewBox="0 0 24 24" style="display:none"><path d="M8 5h2v5H5V8h3V5zm6 0h2v3h3v2h-5V5zM5 14h5v5H8v-3H5v-2zm9 0h5v2h-3v3h-2v-5z"/></svg>
+    </button>
+  </div>
+
+  <div id="stage"><div id="keys"></div></div>
+
+  <div id="mini">
+    <div id="miniInner">
+      <canvas id="miniCanvas"></canvas>
+      <div id="miniClip"><div id="miniWin"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="startOverlay">
+  <div class="card">
+    <svg viewBox="0 0 24 24" width="56" height="56" fill="#e8b14a"><path d="M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm1 2v14h3v-5H7V5H5zm4 0v9H8v5h3v-5h-1V5H9zm4 0v9h-1v5h3v-5h-1V5h-1zm4 0v9h-1v5h3V5h-2z"/></svg>
+    <h2>Piano de 88 teclas</h2>
+    <p>Deslizá el recuadro de abajo para moverte por el teclado.</p>
+    <button class="btn on" id="btnStartFull">Tocar en pantalla completa</button>
+    <button class="btn" id="btnStart">Tocar así</button>
+  </div>
+</div>
+
+<div class="overlay" id="rotateOverlay">
+  <div class="card">
+    <svg class="rotate-icon" viewBox="0 0 24 24"><path d="M16.5 1h-9A2.5 2.5 0 0 0 5 3.5v17A2.5 2.5 0 0 0 7.5 23h9a2.5 2.5 0 0 0 2.5-2.5v-17A2.5 2.5 0 0 0 16.5 1zM14 21h-4v-1h4v1zm3-3H7V4h10v14z"/></svg>
+    <h2>Girá el teléfono</h2>
+    <p>El piano se toca mejor en horizontal.</p>
+    <button class="btn" id="btnRotateDismiss">Seguir en vertical</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ================== Configuración ==================
+  const FIRST = 21;   // A0
+  const LAST  = 108;  // C8
+  const NAMES_ES = ['Do','Do#','Re','Re#','Mi','Fa','Fa#','Sol','Sol#','La','La#','Si'];
+  const isBlack = m => [1,3,6,8,10].includes(m % 12);
+  const octaveOf = m => Math.floor(m / 12) - 1;
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('piano.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('piano.' + k, JSON.stringify(v)); } catch {} }
+  };
+
+  const state = {
+    whiteW: store.get('whiteW', 0),        // 0 = calcular según pantalla
+    scroll: 0,
+    sustain: store.get('sustain', false),
+    labels: store.get('labels', 1),        // 0 nada, 1 solo Do, 2 todas
+    volume: store.get('volume', 0.8),
+    rotateDismissed: false,
+  };
+
+  // ================== Audio ==================
+  let ctx = null, master = null, comp = null;
+  const buffers = new Map();   // midi -> AudioBuffer
+  let samplesReady = false;
+
+  const SAMPLE_NAMES = ['A0'];
+  for (let o = 1; o <= 7; o++) SAMPLE_NAMES.push('C'+o, 'Ds'+o, 'Fs'+o, 'A'+o);
+  SAMPLE_NAMES.push('C8');
+  const nameToMidi = n => {
+    const m = n.match(/^([A-G])(s?)(\d)$/);
+    const base = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 }[m[1]] + (m[2] ? 1 : 0);
+    return base + (parseInt(m[3]) + 1) * 12;
+  };
+
+  function initAudio() {
+    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    ctx = new AC({ latencyHint: 'interactive' });
+    comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.knee.value = 12; comp.ratio.value = 4;
+    comp.attack.value = 0.003; comp.release.value = 0.25;
+    master = ctx.createGain();
+    master.gain.value = state.volume;
+    master.connect(comp).connect(ctx.destination);
+    loadSamples();
+  }
+
+  async function loadSamples() {
+    let done = 0;
+    const setStatus = () => status(`Cargando sonido… ${Math.round(done / SAMPLE_NAMES.length * 100)}%`);
+    setStatus();
+    await Promise.all(SAMPLE_NAMES.map(async n => {
+      try {
+        const res = await fetch('samples/' + n + '.mp3');
+        const arr = await res.arrayBuffer();
+        const buf = await new Promise((ok, ko) => ctx.decodeAudioData(arr, ok, ko));
+        buffers.set(nameToMidi(n), buf);
+      } catch (e) { console.warn('No se pudo cargar', n, e); }
+      done++; setStatus();
+    }));
+    samplesReady = buffers.size > 0;
+    status(samplesReady ? 'Piano de cola listo' : 'Sonido sintetizado');
+  }
+
+  const voices = new Map();      // midi -> {src, gain}
+  const held = new Set();        // notas apretadas físicamente
+  const sustained = new Set();   // notas sonando por el pedal
+
+  function nearestSample(midi) {
+    let best = null, bd = 1e9;
+    for (const m of buffers.keys()) { const d = Math.abs(m - midi); if (d < bd) { bd = d; best = m; } }
+    return best;
+  }
+
+  function startVoice(midi, velocity = 0.85) {
+    if (!ctx) return;
+    stopVoice(midi, 0.04);
+    const t = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.connect(master);
+    let src;
+    if (samplesReady) {
+      const s = nearestSample(midi);
+      src = ctx.createBufferSource();
+      src.buffer = buffers.get(s);
+      src.playbackRate.value = Math.pow(2, (midi - s) / 12);
+      gain.gain.setValueAtTime(velocity, t);
+      src.connect(gain);
+      src.start(t);
+    } else {
+      // Sintetizador simple de respaldo mientras cargan las muestras
+      const f = 440 * Math.pow(2, (midi - 69) / 12);
+      src = ctx.createOscillator();
+      src.type = 'triangle';
+      src.frequency.value = f;
+      const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2;
+      const g2 = ctx.createGain(); g2.gain.value = 0.3;
+      o2.connect(g2).connect(gain);
+      src.connect(gain);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(velocity * 0.5, t + 0.005);
+      gain.gain.exponentialRampToValueAtTime(velocity * 0.12, t + 0.6);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 4);
+      src.start(t); o2.start(t); src.stop(t + 4); o2.stop(t + 4);
+      src._o2 = o2;
+    }
+    voices.set(midi, { src, gain });
+  }
+
+  function stopVoice(midi, rel) {
+    const v = voices.get(midi);
+    if (!v) return;
+    voices.delete(midi);
+    const t = ctx.currentTime;
+    const r = rel ?? (midi > 88 ? 0.25 : 0.45);
+    v.gain.gain.cancelScheduledValues(t);
+    v.gain.gain.setValueAtTime(v.gain.gain.value, t);
+    v.gain.gain.setTargetAtTime(0, t, r / 4);
+    try { v.src.stop(t + r + 0.1); if (v.src._o2) v.src._o2.stop(t + r + 0.1); } catch {}
+    setTimeout(() => v.gain.disconnect(), (r + 0.3) * 1000);
+  }
+
+  function noteOn(midi) {
+    initAudio();
+    if (held.has(midi)) return;
+    held.add(midi);
+    sustained.delete(midi);
+    startVoice(midi);
+    keyEls[midi]?.classList.add('down');
+    drawMini();
+  }
+  function noteOff(midi) {
+    if (!held.has(midi)) return;
+    held.delete(midi);
+    keyEls[midi]?.classList.remove('down');
+    if (state.sustain) sustained.add(midi); else stopVoice(midi);
+    drawMini();
+  }
+  function releaseSustain() {
+    for (const m of sustained) if (!held.has(m)) stopVoice(m, 0.6);
+    sustained.clear();
+  }
+
+  // ================== Teclado ==================
+  const stage = document.getElementById('stage');
+  const keysEl = document.getElementById('keys');
+  const keyEls = {};
+  const whiteList = [];   // midis de teclas blancas en orden
+  for (let m = FIRST; m <= LAST; m++) if (!isBlack(m)) whiteList.push(m);
+  const WHITE_COUNT = whiteList.length; // 52
+  const whiteIndex = {};
+  whiteList.forEach((m, i) => whiteIndex[m] = i);
+
+  // Desplazamiento de cada negra respecto al borde entre blancas (como un piano real)
+  const BLACK_OFFSET = { 1: -0.08, 3: 0.08, 6: -0.1, 8: 0, 10: 0.1 };
+  const BLACK_W = 0.6;
+
+  let geom = { whiteW: 60, blackW: 36, totalW: 0, viewW: 0, viewH: 0 };
+
+  function defaultWhiteW() {
+    // Arranca mostrando ~2 octavas en celular horizontal, más en pantallas grandes
+    const w = stage.clientWidth || window.innerWidth;
+    const target = w < 700 ? 14 : w < 1100 ? 21 : 28;
+    return Math.max(28, Math.min(110, w / target));
+  }
+
+  function noteLabel(m) {
+    if (state.labels === 0) return '';
+    const pc = m % 12;
+    if (state.labels === 1) return pc === 0 ? 'Do' + octaveOf(m) : '';
+    return NAMES_ES[pc] + (pc === 0 ? octaveOf(m) : '');
+  }
+
+  function buildKeys() {
+    keysEl.innerHTML = '';
+    for (let m = FIRST; m <= LAST; m++) {
+      const el = document.createElement('div');
+      el.className = isBlack(m) ? 'black' : 'white' + (m % 12 === 0 ? ' c-key' : '');
+      const lbl = document.createElement('span'); lbl.className = 'lbl';
+      el.appendChild(lbl);
+      keyEls[m] = el;
+      keysEl.appendChild(el);
+    }
+    layout();
+  }
+
+  function blackLeft(m) {
+    // la negra m está entre la blanca m-1 y m+1
+    const wi = whiteIndex[m - 1] + 1;
+    return (wi + BLACK_OFFSET[m % 12] - BLACK_W / 2) * geom.whiteW;
+  }
+
+  function layout(keepCenter = true) {
+    const oldCenterRatio = geom.totalW ? (state.scroll + geom.viewW / 2) / geom.totalW : null;
+    geom.viewW = stage.clientWidth;
+    geom.viewH = stage.clientHeight;
+    if (!state.whiteW) state.whiteW = defaultWhiteW();
+    geom.whiteW = state.whiteW;
+    geom.blackW = geom.whiteW * BLACK_W;
+    geom.totalW = geom.whiteW * WHITE_COUNT;
+    keysEl.style.width = geom.totalW + 'px';
+    const small = geom.whiteW < 40;
+    for (let m = FIRST; m <= LAST; m++) {
+      const el = keyEls[m];
+      if (isBlack(m)) {
+        el.style.left = blackLeft(m) + 'px';
+        el.style.width = geom.blackW + 'px';
+      } else {
+        el.style.left = whiteIndex[m] * geom.whiteW + 'px';
+        el.style.width = geom.whiteW + 'px';
+      }
+      el.firstChild.textContent = noteLabel(m);
+      el.style.fontSize = isBlack(m) ? (small ? '8px' : '10px') : (small ? '10px' : '12px');
+    }
+    if (keepCenter && oldCenterRatio !== null) {
+      setScroll(oldCenterRatio * geom.totalW - geom.viewW / 2);
+    } else if (!keepCenter) {
+      // posición inicial: centrado en Do central (C4 = 60)
+      setScroll(store.get('scrollRatio', null) !== null
+        ? store.get('scrollRatio') * geom.totalW
+        : whiteIndex[60] * geom.whiteW + geom.whiteW * 3.5 - geom.viewW / 2);
+    } else setScroll(state.scroll);
+    sizeMini();
+  }
+
+  function maxScroll() { return Math.max(0, geom.totalW - geom.viewW); }
+  function setScroll(x) {
+    state.scroll = Math.max(0, Math.min(maxScroll(), x));
+    keysEl.style.transform = `translate3d(${-state.scroll}px,0,0)`;
+    // si el teclado entero entra en pantalla, centrarlo
+    if (geom.totalW < geom.viewW) keysEl.style.transform = `translate3d(${(geom.viewW - geom.totalW) / 2}px,0,0)`;
+    positionMiniWin();
+  }
+  function saveScroll() { if (geom.totalW) store.set('scrollRatio', state.scroll / geom.totalW); }
+
+  // Calcula la nota bajo un punto (coordenadas de pantalla)
+  function noteAt(clientX, clientY) {
+    const r = stage.getBoundingClientRect();
+    let x = clientX - r.left;
+    const y = clientY - r.top;
+    if (y < 0 || y > r.height) return null;
+    const offset = geom.totalW < geom.viewW ? -(geom.viewW - geom.totalW) / 2 : state.scroll;
+    x += offset;
+    if (x < 0 || x >= geom.totalW) return null;
+    if (y < r.height * 0.62) {
+      const wi = Math.floor(x / geom.whiteW);
+      for (const m of [whiteList[wi] - 1, whiteList[wi] + 1]) {
+        if (m >= FIRST && m <= LAST && isBlack(m)) {
+          const l = blackLeft(m);
+          if (x >= l && x <= l + geom.blackW) return m;
+        }
+      }
+    }
+    return whiteList[Math.min(WHITE_COUNT - 1, Math.floor(x / geom.whiteW))];
+  }
+
+  // Multitáctil + glissando
+  const pointers = new Map(); // pointerId -> midi
+  stage.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    stage.setPointerCapture?.(e.pointerId);
+    const m = noteAt(e.clientX, e.clientY);
+    pointers.set(e.pointerId, m);
+    if (m != null) noteOn(m);
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!pointers.has(e.pointerId)) return;
+    const prev = pointers.get(e.pointerId);
+    const m = noteAt(e.clientX, e.clientY);
+    if (m === prev) return;
+    pointers.set(e.pointerId, m);
+    if (prev != null && ![...pointers.values()].includes(prev)) noteOff(prev);
+    if (m != null) noteOn(m);
+  });
+  const endPointer = e => {
+    if (!pointers.has(e.pointerId)) return;
+    const prev = pointers.get(e.pointerId);
+    pointers.delete(e.pointerId);
+    if (prev != null && ![...pointers.values()].includes(prev)) noteOff(prev);
+  };
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+  stage.addEventListener('lostpointercapture', endPointer);
+
+  // Rueda del mouse / trackpad desplaza el teclado
+  stage.addEventListener('wheel', e => {
+    e.preventDefault();
+    setScroll(state.scroll + (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY));
+    saveScroll();
+  }, { passive: false });
+
+  // ================== Minimapa ==================
+  const mini = document.getElementById('miniInner');
+  const canvas = document.getElementById('miniCanvas');
+  const win = document.getElementById('miniWin');
+  const c2d = canvas.getContext('2d');
+  let miniW = 0, miniH = 0;
+
+  function sizeMini() {
+    const dpr = window.devicePixelRatio || 1;
+    miniW = mini.clientWidth; miniH = mini.clientHeight;
+    canvas.width = Math.round(miniW * dpr); canvas.height = Math.round(miniH * dpr);
+    c2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawMini();
+    positionMiniWin();
+  }
+
+  function drawMini() {
+    if (!miniW) return;
+    const ww = miniW / WHITE_COUNT;
+    c2d.clearRect(0, 0, miniW, miniH);
+    c2d.fillStyle = '#fafafa';
+    c2d.fillRect(0, 0, miniW, miniH);
+    for (let i = 0; i < WHITE_COUNT; i++) {
+      const m = whiteList[i];
+      if (held.has(m)) { c2d.fillStyle = '#e8b14a'; c2d.fillRect(i * ww, 0, ww, miniH); }
+      c2d.fillStyle = m % 12 === 0 ? '#888' : '#bbb';
+      c2d.fillRect(Math.round(i * ww), 0, 1, miniH);
+    }
+    for (let m = FIRST; m <= LAST; m++) {
+      if (!isBlack(m)) continue;
+      const wi = whiteIndex[m - 1] + 1;
+      const x = (wi + BLACK_OFFSET[m % 12] - BLACK_W / 2) * ww;
+      c2d.fillStyle = held.has(m) ? '#b8862b' : '#222';
+      c2d.fillRect(x, 0, ww * BLACK_W, miniH * 0.6);
+    }
+  }
+
+  function positionMiniWin() {
+    if (!geom.totalW || !miniW) return;
+    const ratio = miniW / geom.totalW;
+    const w = Math.min(miniW, geom.viewW * ratio);
+    win.style.width = w + 'px';
+    win.style.left = Math.min(miniW - w, state.scroll * ratio) + 'px';
+  }
+
+  // Tocar o arrastrar en el minimapa mueve la ventana
+  let miniDrag = null;
+  mini.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    mini.setPointerCapture?.(e.pointerId);
+    const r = mini.getBoundingClientRect();
+    const ratio = geom.totalW / miniW;
+    const winLeft = state.scroll / ratio;
+    const winW = geom.viewW / ratio;
+    const x = e.clientX - r.left;
+    // Si tocás dentro del recuadro, lo arrastrás; si tocás afuera, salta centrado ahí
+    if (x >= winLeft && x <= winLeft + winW) miniDrag = { id: e.pointerId, grab: x - winLeft };
+    else { miniDrag = { id: e.pointerId, grab: winW / 2 }; }
+    setScroll((x - miniDrag.grab) * ratio);
+  });
+  mini.addEventListener('pointermove', e => {
+    if (!miniDrag || miniDrag.id !== e.pointerId) return;
+    const r = mini.getBoundingClientRect();
+    setScroll((e.clientX - r.left - miniDrag.grab) * (geom.totalW / miniW));
+  });
+  const endMini = () => { if (miniDrag) { miniDrag = null; saveScroll(); } };
+  mini.addEventListener('pointerup', endMini);
+  mini.addEventListener('pointercancel', endMini);
+
+  // ================== Controles ==================
+  const $ = id => document.getElementById(id);
+  function status(t) { $('status').textContent = t; }
+  let toastT;
+  function toast(t, ms = 3500) {
+    const el = $('toast'); el.textContent = t; el.classList.add('show');
+    clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), ms);
+  }
+
+  function zoom(f) {
+    state.whiteW = Math.max(24, Math.min(140, geom.whiteW * f));
+    store.set('whiteW', state.whiteW);
+    layout(true);
+  }
+  $('btnZoomIn').onclick = () => zoom(1.2);
+  $('btnZoomOut').onclick = () => zoom(1 / 1.2);
+
+  function renderSustain() { $('btnSustain').classList.toggle('on', state.sustain); }
+  $('btnSustain').onclick = () => {
+    state.sustain = !state.sustain; store.set('sustain', state.sustain);
+    if (!state.sustain) releaseSustain();
+    renderSustain();
+  };
+
+  const LABEL_TXT = ['Notas: no', 'Notas: Do', 'Notas: todas'];
+  function renderLabels() { $('btnLabels').textContent = LABEL_TXT[state.labels]; }
+  $('btnLabels').onclick = () => {
+    state.labels = (state.labels + 1) % 3; store.set('labels', state.labels);
+    renderLabels(); layout(true);
+  };
+
+  $('vol').value = state.volume;
+  $('vol').oninput = e => {
+    state.volume = parseFloat(e.target.value); store.set('volume', state.volume);
+    if (master) master.gain.setTargetAtTime(state.volume, ctx.currentTime, 0.02);
+  };
+
+  // ================== Pantalla completa ==================
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const fsSupported = () => !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+  const isStandalone = () => window.matchMedia('(display-mode: fullscreen)').matches
+    || window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+
+  async function enterFullscreen() {
+    const de = document.documentElement;
+    try {
+      if (de.requestFullscreen) await de.requestFullscreen({ navigationUI: 'hide' });
+      else if (de.webkitRequestFullscreen) de.webkitRequestFullscreen();
+      else { iosHint(); return; }
+      try { await screen.orientation?.lock?.('landscape'); } catch {}
+    } catch { iosHint(); }
+  }
+  async function exitFullscreen() {
+    try { screen.orientation?.unlock?.(); } catch {}
+    if (document.exitFullscreen) await document.exitFullscreen().catch(() => {});
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  }
+  function iosHint() {
+    if (!isStandalone()) toast('En iPhone: tocá Compartir → "Agregar a inicio" y abrilo desde ahí para verlo en pantalla completa.', 6000);
+  }
+  function onFsChange() {
+    const on = !!fsEl();
+    $('icoFull').style.display = on ? 'none' : '';
+    $('icoExit').style.display = on ? '' : 'none';
+    $('btnFull').classList.toggle('on', on);
+    setTimeout(() => { layout(true); checkOrientation(); }, 120);
+  }
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  $('btnFull').onclick = () => fsEl() ? exitFullscreen() : enterFullscreen();
+  if (isStandalone()) $('btnFull').style.display = 'none';
+
+  // ================== Inicio / orientación ==================
+  function start(full) {
+    initAudio();
+    $('startOverlay').classList.remove('show');
+    if (full && fsSupported()) enterFullscreen(); else if (full) iosHint();
+    checkOrientation();
+  }
+  $('btnStart').onclick = () => start(false);
+  $('btnStartFull').onclick = () => start(true);
+  if (!fsSupported() || isStandalone()) $('btnStartFull').style.display = 'none';
+
+  function checkOrientation() {
+    const portrait = window.innerHeight > window.innerWidth && window.innerWidth < 700;
+    const show = portrait && !state.rotateDismissed && !$('startOverlay').classList.contains('show');
+    $('rotateOverlay').classList.toggle('show', show);
+  }
+  $('btnRotateDismiss').onclick = () => { state.rotateDismissed = true; checkOrientation(); };
+
+  let resizeT;
+  const onResize = () => { clearTimeout(resizeT); resizeT = setTimeout(() => { layout(true); checkOrientation(); }, 80); };
+  window.addEventListener('resize', onResize);
+  window.addEventListener('orientationchange', onResize);
+  new ResizeObserver(onResize).observe(stage);
+
+  // Soltar todo si la app pasa a segundo plano
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { for (const m of [...held]) noteOff(m); pointers.clear(); releaseSustain(); }
+  });
+  document.addEventListener('contextmenu', e => e.preventDefault());
+
+  // ================== Teclado de computadora ==================
+  // Fila A S D F... = blancas, W E T Y U... = negras, desde Do4. Z / X cambian de octava.
+  const KEYMAP = { a:0, w:1, s:2, e:3, d:4, f:5, t:6, g:7, y:8, h:9, u:10, j:11, k:12, o:13, l:14, p:15, 'ñ':16, ';':16 };
+  let kbOct = 4;
+  const kbDown = new Map();
+  window.addEventListener('keydown', e => {
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); if (!state.sustain) { state.sustain = true; renderSustain(); } return; }
+    if (k === 'z') { kbOct = Math.max(0, kbOct - 1); toast('Octava ' + kbOct, 1200); return; }
+    if (k === 'x') { kbOct = Math.min(7, kbOct + 1); toast('Octava ' + kbOct, 1200); return; }
+    if (!(k in KEYMAP)) return;
+    const m = (kbOct + 1) * 12 + KEYMAP[k];
+    if (m < FIRST || m > LAST) return;
+    if ($('startOverlay').classList.contains('show')) start(false);
+    kbDown.set(k, m); noteOn(m);
+    // seguir la nota con el minimapa si quedó fuera de vista
+    const x = isBlack(m) ? blackLeft(m) : whiteIndex[m] * geom.whiteW;
+    if (x < state.scroll || x > state.scroll + geom.viewW - geom.whiteW) { setScroll(x - geom.viewW / 2); saveScroll(); }
+  });
+  window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase();
+    if (k === ' ') { state.sustain = store.get('sustain', false); if (!state.sustain) releaseSustain(); renderSustain(); return; }
+    if (kbDown.has(k)) { noteOff(kbDown.get(k)); kbDown.delete(k); }
+  });
+
+  // ================== Arranque ==================
+  buildKeys();
+  layout(false);
+  renderSustain();
+  renderLabels();
+  $('startOverlay').classList.add('show');
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+})();
+</script>
+</body>
+</html>
