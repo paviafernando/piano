@@ -44,6 +44,7 @@
   <div id="hud" hidden>
     <button class="btn" id="hudPause" title="Pausa"><svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg></button>
     <div class="hud-song"><span id="hudEmoji"></span><span id="hudName"></span></div>
+    <div class="hud-fig" id="hudFig"></div>
     <div class="hud-prog"><div id="hudProg"></div></div>
     <div class="hud-combo" id="hudCombo"></div>
     <div class="hud-score" id="hudScore">0</div>
@@ -87,6 +88,7 @@
   <div class="panel">
     <div class="panel-head">
       <h2 id="pickTitle">¿Qué tocamos hoy?</h2>
+      <button class="btn" id="btnDuo">📱📱 Dos manos</button>
       <div class="rank" id="rank"></div>
       <button class="btn" id="pickClose" title="Cerrar">✕</button>
     </div>
@@ -132,10 +134,41 @@
     <div class="bigstars" id="resStars"><span>⭐</span><span>⭐</span><span>⭐</span></div>
     <div class="score-big" id="resScore">0</div>
     <div id="resRecord" class="record" hidden>🏆 ¡Nuevo récord!</div>
+    <div id="resDuo" class="resduo" hidden></div>
     <div class="stats" id="resStats"></div>
     <button class="btn on" id="btnAgain">🔁 Otra vez</button>
     <button class="btn" id="btnResSongs">🎵 Otra canción</button>
     <button class="btn" id="btnResQuit">🏠 Salir</button>
+  </div>
+</div>
+
+<!-- Dos dispositivos -->
+<div class="overlay" id="duoOverlay">
+  <div class="card duo">
+    <div class="duo-emoji">📱🤝📱</div>
+    <h2>Dos manos, dos dispositivos</h2>
+    <p id="duoIntro">Uno toca la mano derecha (melodía) y el otro la mano izquierda (acompañamiento). Los dos tienen que tener internet.</p>
+    <div id="duoIdle">
+      <button class="btn on" id="duoCreate">✨ Crear sala</button>
+      <div class="joinrow">o unite con un código:
+        <input id="duoCode" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="1234" autocomplete="off">
+        <button class="btn" id="duoJoin">Unirme</button>
+      </div>
+    </div>
+    <div id="duoWait" hidden>
+      <div class="code" id="duoCodeShow"></div>
+      <p id="duoWaitTxt"></p>
+      <button class="btn" id="duoCancel">Cancelar</button>
+    </div>
+    <div id="duoOn" hidden>
+      <p class="ok">✅ ¡Conectados!</p>
+      <p id="duoHandTxt"></p>
+      <button class="btn" id="duoSwap">🔄 Cambiar de mano</button>
+      <button class="btn on" id="duoPick">🎵 Elegir canción</button>
+      <button class="btn" id="duoLeave">Desconectar</button>
+    </div>
+    <div class="err" id="duoErr"></div>
+    <button class="btn" id="duoClose">Cerrar</button>
   </div>
 </div>
 
