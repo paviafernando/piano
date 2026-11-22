@@ -1,4 +1,4 @@
-const CACHE = 'piano-v5';
+const CACHE = 'piano-v6';
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', 'index.html', 'style.css', 'js/app.js', 'js/songs.js', 'js/vendor/qrcode.js', 'js/vendor/peerjs.min.js', 'manifest.json', 'icon.svg'])));
   self.skipWaiting();

@@ -133,7 +133,7 @@
 
   // Efectos de sonido cortos (campanita)
   function chime(freqs, step = 0.07, vol = 0.12) {
-    if (!ctx) return;
+    if (!ctx || (tv.role === 'tv' && tv.sound === 'off')) return;
     const t0 = ctx.currentTime;
     freqs.forEach((f, i) => {
       const t = t0 + i * step;
@@ -146,6 +146,56 @@
     });
   }
   const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  // ---- Fondo: metrónomo y base suave ----
+  let noiseBuf = null;
+  function bgOut() {
+    if (!bgOut.g) { bgOut.g = ctx.createGain(); bgOut.g.gain.value = 0.9; bgOut.g.connect(master); }
+    return bgOut.g;
+  }
+  function bgClick(at, accent) {
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = accent ? 1760 : 1320;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(accent ? 0.28 : 0.16, at + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05);
+    o.connect(g).connect(bgOut()); o.start(at); o.stop(at + 0.06);
+  }
+  function bgKick(at, vol = 0.32) {
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(130, at); o.frequency.exponentialRampToValueAtTime(45, at + 0.14);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+    o.connect(g).connect(bgOut()); o.start(at); o.stop(at + 0.24);
+  }
+  function bgHat(at, vol = 0.05) {
+    if (!noiseBuf) {
+      noiseBuf = ctx.createBuffer(1, Math.round(ctx.sampleRate * 0.1), ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05);
+    src.connect(f).connect(g).connect(bgOut()); src.start(at); src.stop(at + 0.06);
+  }
+  // Colchón suave (sintetizador cálido) para la armonía
+  function bgPad(midi, at, durSec) {
+    const f = hz(midi);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1100;
+    const g = ctx.createGain();
+    const end = at + Math.max(0.2, durSec);
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(0.055, at + 0.12);
+    g.gain.setValueAtTime(0.055, end); g.gain.exponentialRampToValueAtTime(0.0001, end + 0.45);
+    lp.connect(g).connect(bgOut());
+    for (const det of [-7, 7]) {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f; o.detune.value = det;
+      o.connect(lp); o.start(at); o.stop(end + 0.5);
+    }
+    const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2;
+    const g2 = ctx.createGain(); g2.gain.value = 0.35; o2.connect(g2).connect(lp); o2.start(at); o2.stop(end + 0.5);
+  }
+
 
   function noteOn(midi) {
     initAudio();
@@ -593,17 +643,17 @@
     stopPreview();
     initAudio();
     if (tv.role === 'pad' && tv.connected) {
-      padSend({ t: 'start', song: song.id, mode, tempo: tempoVal(), view: store.get('view', 'blocks') });
+      padSend({ t: 'start', song: song.id, mode, tempo: tempoVal(), view: store.get('view', 'blocks'), bg: store.get('bg', 'off') });
       hideAll();
       toast('📺 ¡A jugar en la tele!', 1500);
       return;
     }
-    if (tv.role === 'tv') { tvBegin(song, mode, tempoVal(), store.get('view', 'blocks')); return; }
+    if (tv.role === 'tv') { tvBegin(song, mode, tempoVal(), store.get('view', 'blocks'), store.get('bg', 'off')); return; }
     const duoOn = mode !== 'guess' && duo.connected;
     if (duoOn && !opts.remote) {
-      duoSend({ t: 'start', song: song.id, mode, tempo: tempoVal() });
+      duoSend({ t: 'start', song: song.id, mode, tempo: tempoVal(), bg: store.get('bg', 'off') });
       hideAll();
-      setTimeout(() => beginGame(song, mode, { duo: true }), Math.min(250, duo.rtt / 2));
+      setTimeout(() => beginGame(song, mode, { duo: true, bg: store.get('bg', 'off') }), Math.min(250, duo.rtt / 2));
       return;
     }
     beginGame(song, mode, { duo: duoOn, tempo: opts.tempo });
@@ -624,6 +674,8 @@
     game.counts = { perfect: 0, great: 0, good: 0, miss: 0, short: 0, long: 0 };
     game.partnerResult = null; game.myResult = null;
     game.tv = !!o.tv; game.padScore = {}; game.padTgt = {};
+    game.bg = mode === 'guess' ? 'off' : (o.bg || store.get('bg', 'off'));
+    game.bgBeat = null; game.autoIdx = 0; game.auto = []; game.bgCount = 0; game.bgPads = 0;
     if (mode === 'guess') {
       game.tempo = 1; game.grand = false;
       const pool = GUESS_POOLS[song.level];
@@ -652,6 +704,9 @@
         state: 'pending', mist: false, pressed: false, mine: myVoices.includes(n.voice), owner: ownerOf(n.voice),
       }));
       game.mine = game.notes.filter(n => n.mine);
+      // La base toca la mano izquierda cuando nadie la está tocando
+      if (!useBass) game.auto = song.bassParsed.map(n => ({ midi: n.midi, ms: LEAD + n.beat * game.msBeat, dur: n.beats * game.msBeat }));
+      game.meter = song.meter || 4; game.pickup = song.pickup || 0;
       game.rests = song.rests.map(r => ({ ...r, ms: LEAD + r.beat * game.msBeat }));
       game.groups = [];
       for (const n of game.notes) {
@@ -894,9 +949,52 @@
     }
   }
 
+  // ¿Este dispositivo es el que hace sonar el fondo?
+  function bgHere() {
+    if (!ctx || game.bg === 'off' || game.mode === 'guess') return false;
+    if (tv.role === 'tv') return tv.sound !== 'off';
+    if (game.duo) return duo.hand === 'right';
+    return true;
+  }
+  function bgTick(t) {
+    if (!bgHere()) return;
+    const ahead = game.mode === 'learn' ? 25 : 90;
+    const atOf = ms => ctx.currentTime + Math.max(0, (ms - t) / 1000);
+    if (game.bgBeat === null) game.bgBeat = Math.ceil((t - LEAD) / game.msBeat - 1e-6);
+    // Tiempos (incluye la cuenta antes de empezar)
+    for (;;) {
+      const b = game.bgBeat, ms = LEAD + b * game.msBeat;
+      if (ms > t + ahead) break;
+      game.bgBeat++;
+      game.bgCount = (game.bgCount || 0) + 1;
+      if (ms < t - 40) continue;
+      const inBar = (((b - game.pickup) % game.meter) + game.meter) % game.meter;
+      const accent = inBar === 0;
+      const counting = ms < LEAD;
+      if (game.bg === 'metro' || counting) bgClick(atOf(ms), accent);
+      else {
+        if (accent) bgKick(atOf(ms));
+        else if (game.meter === 4 && inBar === 2) bgKick(atOf(ms), 0.18);
+        bgHat(atOf(ms), accent ? 0.06 : 0.045);
+        if (game.mode !== 'learn') bgHat(atOf(ms + game.msBeat / 2), 0.025);
+      }
+    }
+    // Armonía de la mano izquierda (si nadie la toca)
+    if (game.bg === 'base') {
+      while (game.autoIdx < game.auto.length && game.auto[game.autoIdx].ms <= t + ahead) {
+        const a = game.auto[game.autoIdx++];
+        game.bgPads = (game.bgPads || 0) + 1;
+        if (a.ms < t - 40) continue;
+        bgPad(a.midi, atOf(a.ms), a.dur / 1000 * 0.95);
+      }
+    }
+  }
+
   function gameTick() {
     if (game.paused || game.ended) return;
     const t = gameTime();
+    if (game.mode !== 'guess') bgTick(t);
+
     if (game.mode === 'guess') {
       if (!game.qStart && game.idx < game.notes.length && now() >= game.lockUntil && t > 900) game.qStart = now();
     } else if (game.mode === 'learn') {
@@ -1462,6 +1560,10 @@
     }
     $('btnDuo').textContent = duo.connected ? (duo.hand === 'right' ? '📱📱 Vos: 👉 Mano derecha' : '📱📱 Vos: 👈 Mano izquierda') : '📱📱 Dos manos';
     $('btnDuo').classList.toggle('on', duo.connected);
+    const bg = store.get('bg', 'off');
+    $('btnBg').textContent = { off: '🥁 Fondo: nada', metro: '🥁 Metrónomo', base: '🥁 Base suave' }[bg];
+    $('btnBg').classList.toggle('on', bg !== 'off');
+    $('btnBg').hidden = pickMode === 'guess';
     for (const b of $('levelTabs').querySelectorAll('button[data-level]')) b.classList.toggle('on', +b.dataset.level === pickLevel);
     $('tempoLbl').textContent = Math.round(tempoVal() * 100) + '%';
     $('tempoBox').style.visibility = pickMode === 'guess' ? 'hidden' : '';
@@ -1508,6 +1610,18 @@
     const b = e.target.closest('button'); if (!b) return;
     store.set('view', b.dataset.view); renderPicker();
   });
+  $('btnBg').onclick = () => {
+    const order = ['off', 'metro', 'base'];
+    const next = order[(order.indexOf(store.get('bg', 'off')) + 1) % 3];
+    store.set('bg', next); renderPicker();
+    if (next !== 'off') {
+      initAudio();
+      const t = ctx.currentTime + 0.05;
+      if (next === 'metro') { bgClick(t, true); bgClick(t + 0.3, false); }
+      else { bgKick(t); bgHat(t + 0.3); }
+    }
+    if (tv.role === 'pad' && tv.connected && next !== 'off') toast('En modo tele, el fondo suena en la tele (activá su sonido 🔊)', 3500);
+  };
   $('levelTabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-level]'); if (!b) return;
     pickLevel = +b.dataset.level; store.set('pickLevel', pickLevel); renderPicker();
@@ -1560,7 +1674,7 @@
   $('btnRestart').onclick = () => { hide('pauseOverlay'); if (isPad()) return padSend({ t: 'restart' }); const s = game.song, m = game.mode; startGame(s, m); };
   $('btnPauseSongs').onclick = () => { hide('pauseOverlay'); if (isPad()) { padSend({ t: 'lobby' }); padExitGame(); return openPicker(); } if (game.duo) duoSend({ t: 'quit' }); openPicker(); };
   $('btnQuit').onclick = () => { if (isPad()) { hideAll(); padSend({ t: 'lobby' }); return padExitGame(); } if (tv.role === 'tv') return tvLobby(); quitGame(); };
-  $('btnAgain').onclick = () => { fx.style.zIndex = 30; if (isPad()) { hideAll(); return padSend({ t: 'restart' }); } if (tv.role === 'tv') return tvBegin(game.song, game.mode, game.tempo, game.view); startGame(game.song, game.mode); };
+  $('btnAgain').onclick = () => { fx.style.zIndex = 30; if (isPad()) { hideAll(); return padSend({ t: 'restart' }); } if (tv.role === 'tv') return tvBegin(game.song, game.mode, game.tempo, game.view, game.bg); startGame(game.song, game.mode); };
   $('btnResSongs').onclick = () => { fx.style.zIndex = 30; if (isPad()) { padSend({ t: 'lobby' }); padExitGame(); } if (tv.role === 'tv') return tvLobby(); openPicker(); };
   $('btnResQuit').onclick = () => { fx.style.zIndex = 30; hideAll(); if (isPad()) { padSend({ t: 'lobby' }); return padExitGame(); } if (tv.role === 'tv') return tvLobby(); endGameUI(); };
 
@@ -1666,7 +1780,7 @@
         if (!song) return;
         stopPreview();
         hide('duoOverlay');
-        beginGame(song, d.mode, { duo: true, tempo: d.tempo });
+        beginGame(song, d.mode, { duo: true, tempo: d.tempo, bg: d.bg });
         break;
       }
       case 'press': {
@@ -1737,7 +1851,7 @@
 
   // ================== Modo tele ==================
   // La tele muestra el juego y decide aciertos; cada celular es un teclado que suena por su cuenta.
-  const tv = { role: null, peer: null, pads: [], code: null, conn: null, connected: false, offset: 0, bestRtt: 1e9, hand: 'right', pingT: null };
+  const tv = { sound: store.get('tvSound', 'off'), role: null, peer: null, pads: [], code: null, conn: null, connected: false, offset: 0, bestRtt: 1e9, hand: 'right', pingT: null };
   const ctrl = { active: false, lo: 60, hi: 72, holds: new Map(), mode: 'learn' };
 
   // ---- Lado tele ----
@@ -1814,16 +1928,18 @@
         break;
       case 'start': {
         const song = SONGS.find(s => s.id === d.song) || GUESS_LEVELS.find(g => g.id === d.song);
-        if (song) tvBegin(song, d.mode, d.tempo, d.view);
+        if (song) tvBegin(song, d.mode, d.tempo, d.view, d.bg);
         break;
       }
-      case 'restart': if (game.song) tvBegin(game.song, game.mode, game.tempo, game.view); break;
+      case 'restart': if (game.song) tvBegin(game.song, game.mode, game.tempo, game.view, game.bg); break;
       case 'on':
         tvKey(d.midi, true);
+        if (tv.sound === 'all' && ctx) startVoice(d.midi, 0.6);
         if (game.active && game.tv) gamePress(d.midi, pad.id, d.at);
         break;
       case 'off':
         tvKey(d.midi, false);
+        if (tv.sound === 'all' && ctx) stopVoice(d.midi);
         if (game.active && game.tv) gameRelease(d.midi, pad.id, d.at);
         break;
       case 'pause': if (game.active && game.tv) pause(true); break;
@@ -1831,11 +1947,11 @@
       case 'lobby': tvLobby(); break;
     }
   }
-  function tvBegin(song, mode, tempo, view) {
+  function tvBegin(song, mode, tempo, view, bg) {
     if (!tv.pads.length) { toast('Conectá un celular escaneando el QR', 3000); return; }
     hideAll();
     $('tempo').value = tempo || 1;
-    beginGame(song, mode, { tv: true, tempo, view });
+    beginGame(song, mode, { tv: true, tempo, view, bg });
     for (const pad of tv.pads) {
       let lo, hi;
       if (mode === 'guess') { lo = Math.min(...GUESS_POOLS[song.level]); hi = Math.max(...GUESS_POOLS[song.level]); }
@@ -1862,6 +1978,8 @@
     $('tvPads').innerHTML =
       `<div class="${r ? 'on' : ''}">👉 Mano derecha: ${r ? '✅ conectada' : 'esperando…'}</div>` +
       `<div class="${l ? 'on' : ''}">👈 Mano izquierda: ${l ? '✅ conectada' : 'esperando… (opcional)'}</div>`;
+    $('tvSound').textContent = { off: '🔇 Sonido de la tele: apagado', fx: '🔊 Sonido de la tele: festejos y fondo', all: '🔊 Sonido de la tele: todo (también el eco)' }[tv.sound];
+    $('tvSound').classList.toggle('on', tv.sound !== 'off');
     $('tvHint').textContent = tv.pads.length ? '¡Listo! Elegí la canción desde el celular 🎵' : 'Escaneá el código con la cámara del celular o tablet';
   }
   // Transporte de prueba entre pestañas (?duotest): la tele hace de centro
@@ -2028,6 +2146,13 @@
 
   // ---- Interfaz ----
   $('btnTvMode').onclick = () => tvStart();
+  $('tvSound').onclick = () => {
+    const order = ['off', 'fx', 'all'];
+    tv.sound = order[(order.indexOf(tv.sound) + 1) % 3];
+    store.set('tvSound', tv.sound);
+    if (tv.sound !== 'off') { initAudio(); chime([hz(72), hz(76), hz(79), hz(84)], 0.08, 0.12); }
+    renderTv();
+  };
   $('tvFull').onclick = () => fsEl() ? exitFullscreen() : enterFullscreen();
   $('tvExit').onclick = () => {
     try { tv.peer?.destroy(); } catch {}

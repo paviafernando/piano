@@ -15,6 +15,8 @@ Piano web de 88 teclas (La0 a Do8), pensado para tocar en el celular en horizont
   - **📱📱 Dos manos**: dos dispositivos conectados con un código de 4 números; uno toca la mano derecha y el otro la izquierda (conexión WebRTC con PeerJS, necesita internet en los dos).
   - **Unirse con QR**: la sala muestra un código QR; escaneándolo con la cámara se abre la app ya conectada.
   - **📺 Modo tele**: abrí la app en la tele y tocá "Usar como tele" (o entrá con `?tv`). La tele muestra el juego y un QR; cada celular que lo escanea se vuelve un teclado (el primero mano derecha, el segundo izquierda) y suena por su cuenta: melodía, acierto y error.
+  - **🥁 Fondo**: metrónomo (con cuenta de entrada y acento en el primer tiempo del compás) o base suave (bombo, platillito y colchón de acordes con la mano izquierda cuando nadie la toca). En modo tele suena en la tele; en dos dispositivos, en el de la mano derecha.
+  - **🔊 Sonido de la tele**: apagado, festejos y fondo, o todo (también el eco de lo que tocan los celulares).
   - **Adivinar**: aparece una nota en el pentagrama y hay que tocar la tecla correcta (3 niveles, con sostenidos en el difícil).
   - Tempo ajustable (40% a 150%), 🎧 escuchar la canción antes, estrellas y récord por canción, rangos por estrellas totales.
 - **Estilo princesa 👑 / normal 🌙**: cambia colores, tipografía, estrellitas y efectos.
